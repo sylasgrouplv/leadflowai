@@ -10,7 +10,9 @@
     "go-live": "bash ./go-live.sh",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/server/db/migrate.ts",
-    "db:seed": "bun run src/server/db/seed.ts"
+    "db:seed": "bun run src/server/db/seed.ts",
+    "log-activity": "bun run scripts/supabase-log/log.ts",
+    "log-activity:snapshot": "bun run scripts/supabase-log/daily-snapshot.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.2",
