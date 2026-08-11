@@ -18,6 +18,7 @@
  * business_reports and are listed on the Analytics page.
  */
 import * as repo from "../db/repo";
+import { isAgentEnabled } from "../platform/settings";
 import { parseHours } from "../appointments/agent";
 
 export const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -304,6 +305,8 @@ export async function generateWeeklyReport(businessId: string, weekStart: number
  * yet. Returns how many reports were created.
  */
 export async function runWeeklyReportJob(nowMs = Date.now()): Promise<number> {
+  // Spec §39 — the platform admin can disable the Business Intelligence agent.
+  if (!(await isAgentEnabled("bi"))) return 0;
   const prevWeekStart = weekStartFor(nowMs - WEEK_MS);
   if (nowMs - weekEndFor(prevWeekStart) < SETTLE_MS) return 0; // week hasn't settled
   const ids = await repo.listAllBusinessIds();

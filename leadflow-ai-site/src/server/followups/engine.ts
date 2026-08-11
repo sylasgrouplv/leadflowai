@@ -28,6 +28,7 @@ import { getEmailProvider, getSmsProvider } from "../integrations";
 import { emitEvent } from "../ai/events";
 import { createFollowUpStepRun } from "../automations/runs";
 import { recordSmsUsage } from "../usage/record";
+import { isAgentEnabled } from "../platform/settings";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -76,6 +77,18 @@ export async function startSequence(businessId: string, leadId: string): Promise
   const lead = await repo.getLeadById(businessId, leadId);
   if (!lead) return { started: false, scheduledFor: null, reason: "no-lead" };
   if (lead.optedOut === 1) return { started: false, scheduledFor: null, reason: "opted-out" };
+  // Spec §39 — the platform admin can disable the follow-up agent globally.
+  if (!(await isAgentEnabled("followup"))) {
+    await repo.logAgentAction(businessId, {
+      agent: "followup",
+      action: "schedule_followup",
+      leadId,
+      input: {},
+      result: { blocked: true, reason: "followup-agent-disabled" },
+      success: false,
+    });
+    return { started: false, scheduledFor: null, reason: "agent-disabled" };
+  }
 
   const config = await repo.getFollowUpConfig(businessId);
   const first = config.find((s) => s.step === 1 && s.enabled);
@@ -163,6 +176,20 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
   if (lead.optedOut === 1 || ["appointment_booked", "customer"].includes(lead.status)) {
     await repo.updateFollowUp(businessId, f.id, { status: "cancelled" });
     return { followUpId, status: "cancelled", step: stepFor(f), reason: `stop-${lead.status === "appointment_booked" ? "booked" : lead.status}` };
+  }
+  // Spec §39 — follow-up agent disabled globally: skip the send (audited, and
+  // the row is marked skipped so the queue never stalls silently).
+  if (!(await isAgentEnabled("followup"))) {
+    await repo.updateFollowUp(businessId, f.id, { status: "skipped" });
+    await repo.logAgentAction(businessId, {
+      agent: "followup",
+      action: "send_followup",
+      leadId: lead.id,
+      input: { followUpId: f.id, templateKey: f.templateKey ?? "" },
+      result: { blocked: true, reason: "followup-agent-disabled" },
+      success: false,
+    });
+    return { followUpId, status: "skipped", step: stepFor(f), reason: "agent-disabled", nextScheduledFor: null };
   }
 
   const step = stepFor(f);

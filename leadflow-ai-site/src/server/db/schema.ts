@@ -48,6 +48,7 @@ export const reviewConfigs = activeSchema.reviewConfigs;
 export const reviews = activeSchema.reviews;
 export const usageEvents = activeSchema.usageEvents;
 export const businessReports = activeSchema.businessReports;
+export const platformSettings = activeSchema.platformSettings;
 
 // --- constants (identical in both modules) ---------------------------------
 export const USER_ROLES = activeSchema.USER_ROLES;

@@ -604,3 +604,22 @@ export const businessReports = pgTable("business_reports", {
   narrativeJson: text("narrative_json").notNull().default("{}"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
 }, (t) => [uniqueIndex("business_reports_biz_week_idx").on(t.businessId, t.weekStart)]);
+
+// ---------------------------------------------------------------------------
+// AI BRAIN 5b — platform-level settings (spec §39 admin AI control)
+// ---------------------------------------------------------------------------
+
+/**
+ * Global platform settings (spec §39): one row per settings key, value stored
+ * as JSON. Written ONLY by platform admins (admin@leadflow.ai) through the
+ * admin-only /api/admin/ai routes — business owners can never touch these
+ * (global safety rules stay platform-controlled). Keys: "agents" (global agent
+ * on/off) and "defaults" (tone/responseLength/escalationSensitivity applied
+ * when a business has not customized the field).
+ */
+export const platformSettings = pgTable("platform_settings", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull(),
+  valueJson: text("value_json").notNull().default("{}"),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+}, (t) => [uniqueIndex("platform_settings_key_idx").on(t.key)]);

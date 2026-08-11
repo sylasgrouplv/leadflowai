@@ -64,6 +64,13 @@
       "when": 1786467000000,
       "tag": "0008_usage_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786470000000,
+      "tag": "0009_platform_settings",
+      "breakpoints": true
     }
   ]
 }
