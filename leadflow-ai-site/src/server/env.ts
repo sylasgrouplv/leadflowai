@@ -15,6 +15,10 @@ export const env = {
   get sessionSecret() {
     return process.env.SESSION_SECRET || "";
   },
+  /** Secret guarding /api/internal/tick (serverless cron). Empty = endpoint locked. */
+  get internalToken() {
+    return process.env.INTERNAL_TOKEN || "";
+  },
   get aiProvider() {
     return process.env.AI_PROVIDER || "mock";
   },

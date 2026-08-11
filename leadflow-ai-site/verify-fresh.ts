@@ -183,35 +183,62 @@ try {
 
 // Cleanup — remove every row created by this verification run.
 try {
-  const db = getDb();
   const bizId = businessId;
   if (bizId) {
-    for (const id of db.select({ id: s.leads.id }).from(s.leads).where(eq(s.leads.businessId, bizId)).all().map((x) => x.id)) {
-      for (const a of db.select().from(s.appointments).where(eq(s.appointments.leadId, id)).all()) db.delete(s.appointments).where(eq(s.appointments.id, a.id)).run();
-      db.delete(s.followUps).where(eq(s.followUps.leadId, id)).run();
-      for (const c of db.select().from(s.conversations).where(eq(s.conversations.leadId, id)).all()) {
-        db.delete(s.messages).where(eq(s.messages.conversationId, c.id)).run();
-        db.delete(s.conversations).where(eq(s.conversations.id, c.id)).run();
+    if (process.env.DATABASE_URL) {
+      // Postgres mode: drizzle's sync .all()/.run() API is bun:sqlite-only,
+      // so clean up with parameterized raw SQL on the same Neon connection.
+      const postgres = (await import("postgres")).default;
+      const pg = postgres(process.env.DATABASE_URL, { max: 1 });
+      const leadIds = `(SELECT id FROM leads WHERE business_id = $1)`;
+      await pg.unsafe(`DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE lead_id IN ${leadIds})`, [bizId]);
+      await pg.unsafe(`DELETE FROM conversations WHERE lead_id IN ${leadIds}`, [bizId]);
+      await pg.unsafe(`DELETE FROM appointments WHERE lead_id IN ${leadIds}`, [bizId]);
+      await pg.unsafe(`DELETE FROM follow_ups WHERE lead_id IN ${leadIds}`, [bizId]);
+      await pg.unsafe(`DELETE FROM agent_actions WHERE lead_id IN ${leadIds}`, [bizId]);
+      await pg.unsafe(`DELETE FROM reviews WHERE lead_id IN ${leadIds}`, [bizId]);
+      await pg.unsafe(`DELETE FROM automation_runs WHERE lead_id IN ${leadIds}`, [bizId]);
+      await pg.unsafe(`DELETE FROM events WHERE business_id = $1`, [bizId]);
+      await pg.unsafe(`DELETE FROM leads WHERE business_id = $1`, [bizId]);
+      for (const t of ["services", "knowledge_base", "follow_up_configs", "review_configs", "notifications", "usage_events", "audit_logs", "widget_settings", "integrations", "subscriptions", "business_reports", "human_tasks"]) {
+        await pg.unsafe(`DELETE FROM ${t} WHERE business_id = $1`, [bizId]);
       }
-      db.delete(s.agentActions).where(eq(s.agentActions.leadId, id)).run();
-      db.delete(s.leads).where(eq(s.leads.id, id)).run();
+      await pg.unsafe(`DELETE FROM businesses WHERE id = $1`, [bizId]);
+      if (userId) {
+        for (const t of ["sessions", "team_members", "audit_logs"]) await pg.unsafe(`DELETE FROM ${t} WHERE user_id = $1`, [userId]);
+        await pg.unsafe(`DELETE FROM users WHERE id = $1`, [userId]);
+      }
+      await pg.end();
+    } else {
+      // SQLite mode — original sync cleanup.
+      const db = getDb();
+      for (const id of db.select({ id: s.leads.id }).from(s.leads).where(eq(s.leads.businessId, bizId)).all().map((x) => x.id)) {
+        for (const a of db.select().from(s.appointments).where(eq(s.appointments.leadId, id)).all()) db.delete(s.appointments).where(eq(s.appointments.id, a.id)).run();
+        db.delete(s.followUps).where(eq(s.followUps.leadId, id)).run();
+        for (const c of db.select().from(s.conversations).where(eq(s.conversations.leadId, id)).all()) {
+          db.delete(s.messages).where(eq(s.messages.conversationId, c.id)).run();
+          db.delete(s.conversations).where(eq(s.conversations.id, c.id)).run();
+        }
+        db.delete(s.agentActions).where(eq(s.agentActions.leadId, id)).run();
+        db.delete(s.leads).where(eq(s.leads.id, id)).run();
+      }
+      db.delete(s.services).where(eq(s.services.businessId, bizId)).run();
+      db.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, bizId)).run();
+      db.delete(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, bizId)).run();
+      db.delete(s.notifications).where(eq(s.notifications.businessId, bizId)).run();
+      db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, bizId)).run();
+      db.delete(s.auditLogs).where(eq(s.auditLogs.businessId, bizId)).run();
+      db.delete(s.widgetSettings).where(eq(s.widgetSettings.businessId, bizId)).run();
+      db.delete(s.integrations).where(eq(s.integrations.businessId, bizId)).run();
+      db.delete(s.subscriptions).where(eq(s.subscriptions.businessId, bizId)).run();
+      db.delete(s.businesses).where(eq(s.businesses.id, bizId)).run();
+      if (userId) {
+        db.delete(s.sessions).where(eq(s.sessions.userId, userId)).run();
+        db.delete(s.teamMembers).where(eq(s.teamMembers.userId, userId)).run();
+        db.delete(s.auditLogs).where(eq(s.auditLogs.userId, userId)).run();
+        db.delete(s.users).where(eq(s.users.id, userId)).run();
+      }
     }
-    db.delete(s.services).where(eq(s.services.businessId, bizId)).run();
-    db.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, bizId)).run();
-    db.delete(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, bizId)).run();
-    db.delete(s.notifications).where(eq(s.notifications.businessId, bizId)).run();
-    db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, bizId)).run();
-    db.delete(s.auditLogs).where(eq(s.auditLogs.businessId, bizId)).run();
-    db.delete(s.widgetSettings).where(eq(s.widgetSettings.businessId, bizId)).run();
-    db.delete(s.integrations).where(eq(s.integrations.businessId, bizId)).run();
-    db.delete(s.subscriptions).where(eq(s.subscriptions.businessId, bizId)).run();
-    db.delete(s.businesses).where(eq(s.businesses.id, bizId)).run();
-  }
-  if (userId) {
-    db.delete(s.sessions).where(eq(s.sessions.userId, userId)).run();
-    db.delete(s.teamMembers).where(eq(s.teamMembers.userId, userId)).run();
-    db.delete(s.auditLogs).where(eq(s.auditLogs.userId, userId)).run();
-    db.delete(s.users).where(eq(s.users.id, userId)).run();
   }
   console.log("cleanup done");
 } catch (e) {

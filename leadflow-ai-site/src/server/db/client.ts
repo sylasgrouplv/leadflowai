@@ -9,9 +9,16 @@
  * metadata matching the active driver. repo.ts is fully async: every drizzle
  * call is awaited, which is harmless for the sync sqlite driver and required
  * for postgres-js — one code path serves both.
+ *
+ * Serverless note (Vercel): `bun:sqlite` and `drizzle-orm/bun-sqlite` are
+ * Bun-only and are therefore NOT imported at module top level — the module
+ * scope only ever pulls in postgres-js/drizzle core (pure JS, Node-safe). The
+ * sqlite driver pair is loaded lazily via import.meta.require (Bun's sync
+ * require) with a computed specifier so no bundler can trace "bun:sqlite" into
+ * a Node bundle; the SQLite branch is unreachable wherever DATABASE_URL is
+ * set (which is always the case on Vercel).
  */
-import { Database } from "bun:sqlite";
-import { drizzle as drizzleSqlite } from "drizzle-orm/bun-sqlite";
+import type { Database as BunSqliteDatabase } from "bun:sqlite";
 import { drizzle as drizzlePg } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
@@ -51,9 +58,9 @@ export function getPgClient(): postgres.Sql {
 }
 
 /** The raw bun:sqlite Database (SQLite mode only). Used for BEGIN/COMMIT. */
-export function getSqliteRaw(): Database {
+export function getSqliteRaw(): BunSqliteDatabase {
   const db = getDb();
-  return db.$client as Database;
+  return db.$client as BunSqliteDatabase;
 }
 
 export function getDb(): Db {
@@ -64,6 +71,10 @@ export function getDb(): Db {
   }
   const file = sqlitePath();
   mkdirSync(path.dirname(file), { recursive: true });
+  // Bun-only driver pair, loaded lazily with computed specifiers (see the
+  // module header). Never reached on Vercel, where DATABASE_URL is always set.
+  const { Database } = import.meta.require("bun" + ":" + "sqlite") as typeof import("bun:sqlite");
+  const { drizzle: drizzleSqlite } = import.meta.require("drizzle-orm" + "/bun-sqlite") as typeof import("drizzle-orm/bun-sqlite");
   const sqlite = new Database(file);
   sqlite.exec("PRAGMA journal_mode = WAL");
   sqlite.exec("PRAGMA foreign_keys = ON");
