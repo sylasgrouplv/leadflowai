@@ -55,7 +55,7 @@ function buildSummary(date: string, entries: unknown[]): { date: string; entryCo
 
 async function main(): Promise<void> {
   const today = formatDate(new Date());
-  const prefix = `activity-logs/${today}/`;
+  const prefix = `${today}/`;
   const { config, missing } = readConfig();
 
   if (!config) {
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
     );
     const entries: unknown[] = [];
     for (const name of names) {
-      const body = await downloadObject(config, name);
+      const body = await downloadObject(config, `${today}/${name}`);
       try {
         entries.push(JSON.parse(body));
       } catch {

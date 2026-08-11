@@ -127,11 +127,12 @@ export async function ensureBucket(cfg: OpsConfig): Promise<void> {
 
 /** Upload one object (one file per entry — never read-modify-write appends). */
 export async function uploadObject(cfg: OpsConfig, path: string, content: string): Promise<void> {
-  const res = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}/${path}`, {
+  const res = await fetch(`${cfg.url}/storage/v1/object/${cfg.bucket}/${path}?upsert=true`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${cfg.serviceKey}`,
       "Content-Type": "application/json",
+      "x-upsert": "true",
     },
     body: content,
   });

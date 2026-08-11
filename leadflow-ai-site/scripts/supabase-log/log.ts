@@ -92,7 +92,7 @@ async function main(): Promise<void> {
 
   try {
     await ensureBucket(config);
-    const path = `activity-logs/${entry.date}/${timeStamp(new Date())}-${slugify(type)}.json`;
+    const path = `${entry.date}/${timeStamp(new Date())}-${slugify(type)}.json`;
     await uploadObject(config, path, json);
     console.log(`logged [${type}] ${summary} -> ${config.bucket}/${path}`);
   } catch (err) {
