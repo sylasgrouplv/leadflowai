@@ -299,12 +299,11 @@ pass("classify: unknown stays neutral", classifySentiment("ok i guess") === "unk
 console.log("\n== cleanup ==");
 try {
   const db = getDb();
-  const leads = db
+  const leads = (await db
     .select()
     .from(schema.leads)
     .where(eq(schema.leads.businessId, bizId))
-    .execute()
-    .filter(
+    .execute()).filter(
       (l) =>
         createdLeadIds.includes(l.id) ||
         (l.phone ?? "").startsWith("+1555000") ||
@@ -350,12 +349,11 @@ try {
       reviewUrl: preReviewConfig.reviewUrl,
     });
   }
-  const notifs = db
+  const notifs = (await db
     .select()
     .from(schema.notifications)
     .where(eq(schema.notifications.businessId, bizId))
-    .execute()
-    .filter((n) => n.createdAt >= START_TS);
+    .execute()).filter((n) => n.createdAt >= START_TS);
   for (const n of notifs) await db.delete(schema.notifications).where(eq(schema.notifications.id, n.id)).execute();
   console.log(`cleanup done (${leads.length} brain4 test leads removed)`);
 } catch (e) {
