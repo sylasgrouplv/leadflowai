@@ -153,7 +153,7 @@ leadRoutes.patch("/:id", async (c) => {
           .update(s.followUps)
           .set({ status: "cancelled", updatedAt: Date.now() })
           .where(and(eq(s.followUps.businessId, business.id), eq(s.followUps.leadId, lead.id), sql`${s.followUps.status} IN ('pending','paused')`))
-          .run();
+          .execute();
       }
     }
   }
@@ -167,18 +167,18 @@ leadRoutes.patch("/:id", async (c) => {
     await startSequence(business.id, updated.id);
   }
   if (isOwner && parsed.data.status === "customer" && updated) {
-    getDb()
+    await getDb()
       .update(s.followUps)
       .set({ status: "cancelled", updatedAt: Date.now() })
       .where(and(eq(s.followUps.businessId, business.id), eq(s.followUps.leadId, lead.id), sql`${s.followUps.status} IN ('pending','paused')`))
-      .run();
+      .execute();
   }
   if (parsed.data.nextFollowUpAt !== undefined && isOwner) {
     if (parsed.data.nextFollowUpAt === null) {
-      getDb()
+      await getDb()
         .delete(s.followUps)
         .where(and(eq(s.followUps.businessId, business.id), eq(s.followUps.leadId, lead.id), eq(s.followUps.status, "pending"), eq(s.followUps.templateKey, "manual")))
-        .run();
+        .execute();
     } else {
       await repo.setNextFollowUp(business.id, lead.id, parsed.data.nextFollowUpAt);
     }

@@ -16,7 +16,7 @@ const PORT = 3000;
 const HOST = "0.0.0.0";
 const CLIENT_DIR = `${import.meta.dir}/dist/client`;
 
-const app = createApp();
+const app = await createApp();
 startSchedulers();
 
 const freePort =

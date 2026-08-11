@@ -9,7 +9,7 @@
  * change inside this file + client.ts, not across the app.
  */
 import { and, asc, count, desc, eq, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
-import { getDb } from "./client";
+import { getDb, getSqliteRaw, isPgMode, type Db } from "./client";
 import * as s from "./schema";
 import {
   type BusinessCategory,
@@ -26,6 +26,32 @@ import {
 import { randomUUID } from "node:crypto";
 
 export const now = () => Date.now();
+
+/**
+ * Run a callback inside a database transaction on either dialect.
+ *
+ * - Postgres (async): drizzle's native transaction with an async callback.
+ * - SQLite: bun:sqlite's native transaction is SYNC-ONLY (it commits before
+ *   microtasks run), so we drive BEGIN/COMMIT/ROLLBACK directly on the raw
+ *   connection — this lets the same async callback work on both drivers.
+ */
+export async function withTransaction<T>(fn: (tx: Db) => Promise<T> | T): Promise<T> {
+  const db = getDb();
+  if (isPgMode()) {
+    return db.transaction(async (tx: Db) => fn(tx));
+  }
+  const raw = getSqliteRaw();
+  raw.exec("BEGIN");
+  try {
+    const result = await fn(db);
+    raw.exec("COMMIT");
+    return result;
+  } catch (err) {
+    raw.exec("ROLLBACK");
+    throw err;
+  }
+}
+
 export const newId = () => randomUUID();
 
 // ---------------------------------------------------------------------------
@@ -43,40 +69,40 @@ export async function createUser(u: NewUser) {
   const db = getDb();
   const id = newId();
   const t = now();
-  db.insert(s.users)
+  await db.insert(s.users)
     .values({ id, email: u.email.toLowerCase(), passwordHash: u.passwordHash, name: u.name, role: u.role ?? "owner", createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getUserById(id);
 }
 
 export async function getUserByEmail(email: string) {
-  const rows = getDb().select().from(s.users).where(eq(s.users.email, email.toLowerCase())).all();
+  const rows = await getDb().select().from(s.users).where(eq(s.users.email, email.toLowerCase())).execute();
   return rows[0] ?? null;
 }
 
 export async function getUserById(id: string) {
-  const rows = getDb().select().from(s.users).where(eq(s.users.id, id)).all();
+  const rows = await getDb().select().from(s.users).where(eq(s.users.id, id)).execute();
   return rows[0] ?? null;
 }
 
 export async function insertSession(id: string, userId: string, tokenHash: string, expiresAt: number) {
-  getDb()
+  await getDb()
     .insert(s.sessions)
     .values({ id, userId, tokenHash, expiresAt, createdAt: now() })
-    .run();
+    .execute();
 }
 
 export async function getSessionByTokenHash(tokenHash: string) {
-  const rows = getDb().select().from(s.sessions).where(eq(s.sessions.tokenHash, tokenHash)).all();
+  const rows = await getDb().select().from(s.sessions).where(eq(s.sessions.tokenHash, tokenHash)).execute();
   return rows[0] ?? null;
 }
 
 export async function deleteSession(id: string) {
-  getDb().delete(s.sessions).where(eq(s.sessions.id, id)).run();
+  await getDb().delete(s.sessions).where(eq(s.sessions.id, id)).execute();
 }
 
 export async function deleteExpiredSessions() {
-  getDb().delete(s.sessions).where(sql`${s.sessions.expiresAt} < ${now()}`).run();
+  await getDb().delete(s.sessions).where(sql`${s.sessions.expiresAt} < ${now()}`).execute();
 }
 
 // ---------------------------------------------------------------------------
@@ -97,8 +123,8 @@ export async function createBusiness(b: NewBusiness) {
   const db = getDb();
   const id = newId();
   const t = now();
-  db.transaction((tx) => {
-    tx.insert(s.businesses)
+  await withTransaction(async (tx) => {
+    await tx.insert(s.businesses)
       .values({
         id,
         ownerId: b.ownerId,
@@ -113,43 +139,43 @@ export async function createBusiness(b: NewBusiness) {
         createdAt: t,
         updatedAt: t,
       })
-      .run();
-    tx.insert(s.teamMembers).values({ id: newId(), businessId: id, userId: b.ownerId, role: "owner", createdAt: t }).run();
+      .execute();
+    await tx.insert(s.teamMembers).values({ id: newId(), businessId: id, userId: b.ownerId, role: "owner", createdAt: t }).execute();
     // Every business starts with an integration row per provider (mock status
     // until connected) and a trialing subscription row.
     for (const provider of s.INTEGRATION_PROVIDERS) {
-      tx.insert(s.integrations)
+      await tx.insert(s.integrations)
         .values({ id: newId(), businessId: id, provider, status: "not_configured", createdAt: t, updatedAt: t })
-        .run();
+        .execute();
     }
-    tx.insert(s.subscriptions)
+    await tx.insert(s.subscriptions)
       .values({ id: newId(), businessId: id, plan: "starter", status: "trialing", createdAt: t, updatedAt: t })
-      .run();
-    tx.insert(s.widgetSettings)
+      .execute();
+    await tx.insert(s.widgetSettings)
       .values({ id: newId(), businessId: id, ...DEFAULT_WIDGET_SETTINGS, createdAt: t, updatedAt: t })
-      .run();
+      .execute();
   });
   return getBusinessById(id);
 }
 
 export async function getBusinessById(id: string) {
-  const rows = getDb().select().from(s.businesses).where(eq(s.businesses.id, id)).all();
+  const rows = await getDb().select().from(s.businesses).where(eq(s.businesses.id, id)).execute();
   return rows[0] ?? null;
 }
 
 /** The first business the user belongs to (via team_members). */
 export async function getBusinessForUser(userId: string) {
-  const rows = getDb()
+  const rows = await getDb()
     .select({ business: s.businesses })
     .from(s.teamMembers)
     .innerJoin(s.businesses, eq(s.teamMembers.businessId, s.businesses.id))
     .where(eq(s.teamMembers.userId, userId))
-    .all();
+    .execute();
   return rows[0]?.business ?? null;
 }
 
 export async function listAllBusinessIds() {
-  const rows = getDb().select({ id: s.businesses.id }).from(s.businesses).all();
+  const rows = await getDb().select({ id: s.businesses.id }).from(s.businesses).execute();
   return rows.map((r) => r.id);
 }
 
@@ -157,10 +183,10 @@ export async function updateBusiness(id: string, patch: Partial<typeof s.busines
   const db = getDb();
   const existing = await getBusinessById(id);
   if (!existing) return null;
-  db.update(s.businesses)
+  await db.update(s.businesses)
     .set({ ...patch, updatedAt: now() })
     .where(eq(s.businesses.id, id))
-    .run();
+    .execute();
   return getBusinessById(id);
 }
 
@@ -170,28 +196,28 @@ export async function advanceOnboarding(id: string, toStep: number) {
   if (!existing) return null;
   const next = Math.max(existing.onboardingStep, toStep);
   const completed = next >= 6 ? 1 : existing.onboardingCompleted;
-  db.update(s.businesses)
+  await db.update(s.businesses)
     .set({ onboardingStep: next, onboardingCompleted: completed, updatedAt: now() })
     .where(eq(s.businesses.id, id))
-    .run();
+    .execute();
   return getBusinessById(id);
 }
 
 export async function addTeamMember(businessId: string, userId: string, role: UserRole) {
   const t = now();
-  getDb()
+  await getDb()
     .insert(s.teamMembers)
     .values({ id: newId(), businessId, userId, role, createdAt: t })
-    .run();
+    .execute();
 }
 
 export async function listTeamMembers(businessId: string) {
-  return getDb()
+  return await getDb()
     .select({ id: s.teamMembers.id, role: s.teamMembers.role, userId: s.teamMembers.userId, name: s.users.name, email: s.users.email })
     .from(s.teamMembers)
     .innerJoin(s.users, eq(s.teamMembers.userId, s.users.id))
     .where(eq(s.teamMembers.businessId, businessId))
-    .all();
+    .execute();
 }
 
 // ---------------------------------------------------------------------------
@@ -199,44 +225,44 @@ export async function listTeamMembers(businessId: string) {
 // ---------------------------------------------------------------------------
 
 export async function listServices(businessId: string) {
-  return getDb().select().from(s.services).where(eq(s.services.businessId, businessId)).orderBy(asc(s.services.createdAt)).all();
+  return await getDb().select().from(s.services).where(eq(s.services.businessId, businessId)).orderBy(asc(s.services.createdAt)).execute();
 }
 
 export async function getServiceById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.services).where(and(eq(s.services.id, id), eq(s.services.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.services).where(and(eq(s.services.id, id), eq(s.services.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function addService(businessId: string, data: { name: string; description?: string; priceCents: number; durationMin: number; averageValueCents?: number }) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.services)
     .values({ id, businessId, name: data.name, description: data.description ?? "", priceCents: data.priceCents, durationMin: data.durationMin, averageValueCents: data.averageValueCents ?? 0, active: 1, createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getServiceById(businessId, id);
 }
 
 export async function updateService(businessId: string, id: string, patch: Partial<typeof s.services.$inferInsert>) {
   const existing = await getServiceById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.services).set({ ...patch, updatedAt: now() }).where(and(eq(s.services.id, id), eq(s.services.businessId, businessId))).run();
+  await getDb().update(s.services).set({ ...patch, updatedAt: now() }).where(and(eq(s.services.id, id), eq(s.services.businessId, businessId))).execute();
   return getServiceById(businessId, id);
 }
 
 export async function deleteService(businessId: string, id: string) {
-  getDb().delete(s.services).where(and(eq(s.services.id, id), eq(s.services.businessId, businessId))).run();
+  await getDb().delete(s.services).where(and(eq(s.services.id, id), eq(s.services.businessId, businessId))).execute();
 }
 
 export async function replaceServices(businessId: string, items: { name: string; description?: string; priceCents: number; durationMin: number; averageValueCents?: number }[]) {
   const db = getDb();
-  db.transaction((tx) => {
-    tx.delete(s.services).where(eq(s.services.businessId, businessId)).run();
+  await withTransaction(async (tx) => {
+    await tx.delete(s.services).where(eq(s.services.businessId, businessId)).execute();
     for (const it of items) {
       const t = now();
-      tx.insert(s.services)
+      await tx.insert(s.services)
         .values({ id: newId(), businessId, name: it.name, description: it.description ?? "", priceCents: it.priceCents, durationMin: it.durationMin, averageValueCents: it.averageValueCents ?? 0, active: 1, createdAt: t, updatedAt: t })
-        .run();
+        .execute();
     }
   });
   return listServices(businessId);
@@ -248,9 +274,9 @@ export async function replaceServices(businessId: string, items: { name: string;
 
 /** Configured average job value for a service — falls back to priceCents when
  *  the owner hasn't set one (0 = "use list price"). Never a real revenue figure. */
-export function effectiveServiceValue(service: { averageValueCents: number | null; priceCents: number } | null): number {
+export function effectiveServiceValue(service: { averageValueCents?: number | null; priceCents?: number } | null): number {
   if (!service) return 0;
-  return service.averageValueCents && service.averageValueCents > 0 ? service.averageValueCents : service.priceCents;
+  return service.averageValueCents && service.averageValueCents > 0 ? service.averageValueCents : (service.priceCents ?? 0);
 }
 
 /** Estimated revenue = booked/completed jobs × configured average job value
@@ -258,11 +284,11 @@ export function effectiveServiceValue(service: { averageValueCents: number | nul
  *  Callers MUST label this "Estimated Revenue" — it is an estimate, not actuals. */
 export async function estimatedRevenueFromJobs(businessId: string): Promise<number> {
   const db = getDb();
-  const appts = db
+  const appts = await db
     .select()
     .from(s.appointments)
     .where(and(eq(s.appointments.businessId, businessId), sql`${s.appointments.status} IN ('booked','confirmed','completed')`))
-    .all();
+    .execute();
   if (!appts.length) return 0;
   const services = await listServices(businessId);
   const byId = new Map(services.map((sv) => [sv.id, sv]));
@@ -279,37 +305,37 @@ export async function estimatedRevenueFromJobs(businessId: string): Promise<numb
 // ---------------------------------------------------------------------------
 
 export async function listKnowledge(businessId: string) {
-  return getDb().select().from(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, businessId)).orderBy(asc(s.knowledgeBase.createdAt)).all();
+  return await getDb().select().from(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, businessId)).orderBy(asc(s.knowledgeBase.createdAt)).execute();
 }
 
 export async function addKnowledge(businessId: string, data: { kind: (typeof KB_KINDS)[number]; question?: string; answer: string }) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.knowledgeBase)
     .values({ id, businessId, kind: data.kind, question: data.question ?? "", answer: data.answer, createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getKnowledgeById(businessId, id);
 }
 
 export async function getKnowledgeById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.knowledgeBase).where(and(eq(s.knowledgeBase.id, id), eq(s.knowledgeBase.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.knowledgeBase).where(and(eq(s.knowledgeBase.id, id), eq(s.knowledgeBase.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function deleteKnowledge(businessId: string, id: string) {
-  getDb().delete(s.knowledgeBase).where(and(eq(s.knowledgeBase.id, id), eq(s.knowledgeBase.businessId, businessId))).run();
+  await getDb().delete(s.knowledgeBase).where(and(eq(s.knowledgeBase.id, id), eq(s.knowledgeBase.businessId, businessId))).execute();
 }
 
 export async function replaceKnowledge(businessId: string, items: { kind: (typeof KB_KINDS)[number]; question?: string; answer: string }[]) {
   const db = getDb();
-  db.transaction((tx) => {
-    tx.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, businessId)).run();
+  await withTransaction(async (tx) => {
+    await tx.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, businessId)).execute();
     for (const it of items) {
       const t = now();
-      tx.insert(s.knowledgeBase)
+      await tx.insert(s.knowledgeBase)
         .values({ id: newId(), businessId, kind: it.kind, question: it.question ?? "", answer: it.answer, createdAt: t, updatedAt: t })
-        .run();
+        .execute();
     }
   });
   return listKnowledge(businessId);
@@ -338,7 +364,7 @@ export interface NewLead {
 export async function createLead(l: NewLead) {
   const t = l.createdAt ?? now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.leads)
     .values({
       id,
@@ -357,32 +383,32 @@ export async function createLead(l: NewLead) {
       createdAt: t,
       updatedAt: t,
     })
-    .run();
+    .execute();
   return getLeadById(l.businessId, id);
 }
 
 export async function getLeadById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.leads).where(and(eq(s.leads.id, id), eq(s.leads.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.leads).where(and(eq(s.leads.id, id), eq(s.leads.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function listLeads(businessId: string, limit = 100) {
-  return getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).orderBy(desc(s.leads.createdAt)).limit(limit).all();
+  return await getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).orderBy(desc(s.leads.createdAt)).limit(limit).execute();
 }
 
 export async function updateLead(businessId: string, id: string, patch: Partial<typeof s.leads.$inferInsert>) {
   const existing = await getLeadById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.leads).set({ ...patch, updatedAt: now() }).where(and(eq(s.leads.id, id), eq(s.leads.businessId, businessId))).run();
+  await getDb().update(s.leads).set({ ...patch, updatedAt: now() }).where(and(eq(s.leads.id, id), eq(s.leads.businessId, businessId))).execute();
   return getLeadById(businessId, id);
 }
 
 export async function countLeadsByStatus(businessId: string, statuses: LeadStatus[]) {
-  const rows = getDb()
+  const rows = await getDb()
     .select({ n: count() })
     .from(s.leads)
     .where(and(eq(s.leads.businessId, businessId), statuses.length ? inArray(s.leads.status, statuses) : sql`1=1`))
-    .all();
+    .execute();
   return rows[0]?.n ?? 0;
 }
 
@@ -393,42 +419,42 @@ export async function countLeadsByStatus(businessId: string, statuses: LeadStatu
 export async function createConversation(businessId: string, data: { leadId?: string; channel?: string; status?: (typeof s.CONVERSATION_STATUSES)[number]; aiEnabled?: number }) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.conversations)
     .values({ id, businessId, leadId: data.leadId ?? null, channel: data.channel ?? "chat", status: data.status ?? "active", aiEnabled: data.aiEnabled ?? 1, createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getConversationById(businessId, id);
 }
 
 export async function getConversationById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.conversations).where(and(eq(s.conversations.id, id), eq(s.conversations.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.conversations).where(and(eq(s.conversations.id, id), eq(s.conversations.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function addMessage(businessId: string, data: { conversationId: string; sender: (typeof s.MESSAGE_SENDERS)[number]; body: string; createdAt?: number }) {
   const t = data.createdAt ?? now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.messages)
     .values({ id, businessId, conversationId: data.conversationId, sender: data.sender, body: data.body, createdAt: t })
-    .run();
-  getDb().update(s.conversations).set({ updatedAt: t }).where(and(eq(s.conversations.id, data.conversationId), eq(s.conversations.businessId, businessId))).run();
+    .execute();
+  await getDb().update(s.conversations).set({ updatedAt: t }).where(and(eq(s.conversations.id, data.conversationId), eq(s.conversations.businessId, businessId))).execute();
   return id;
 }
 
 export async function listMessages(businessId: string, conversationId: string) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.messages)
     .where(and(eq(s.messages.conversationId, conversationId), eq(s.messages.businessId, businessId)))
     .orderBy(asc(s.messages.createdAt))
-    .all();
+    .execute();
 }
 
 export async function updateKnowledge(businessId: string, id: string, patch: Partial<typeof s.knowledgeBase.$inferInsert>) {
   const existing = await getKnowledgeById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.knowledgeBase).set({ ...patch, updatedAt: now() }).where(and(eq(s.knowledgeBase.id, id), eq(s.knowledgeBase.businessId, businessId))).run();
+  await getDb().update(s.knowledgeBase).set({ ...patch, updatedAt: now() }).where(and(eq(s.knowledgeBase.id, id), eq(s.knowledgeBase.businessId, businessId))).execute();
   return getKnowledgeById(businessId, id);
 }
 
@@ -454,7 +480,7 @@ export async function searchLeads(businessId: string, opts: LeadSearch = {}, lim
     const like = `%${opts.q.replace(/[%_]/g, "")}%`;
     conds.push(sql`(${s.leads.firstName} || ' ' || coalesce(${s.leads.lastName}, '') || ' ' || coalesce(${s.leads.phone}, '') || ' ' || coalesce(${s.leads.email}, '') || ' ' || coalesce(${s.leads.serviceRequested}, '') || ' ' || coalesce(${s.leads.location}, '')) LIKE ${like}`);
   }
-  return db
+  return await db
     .select({
       lead: s.leads,
       assignedName: s.users.name,
@@ -464,12 +490,12 @@ export async function searchLeads(businessId: string, opts: LeadSearch = {}, lim
     .where(and(...conds))
     .orderBy(opts.sort === "oldest" ? asc(s.leads.createdAt) : desc(s.leads.createdAt))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Earliest pending follow-up per lead (for the "next follow-up" column). */
 export async function getNextFollowUps(businessId: string) {
-  const rows = getDb()
+  const rows = await getDb()
     .select({
       leadId: s.followUps.leadId,
       scheduledFor: s.followUps.scheduledFor,
@@ -478,7 +504,7 @@ export async function getNextFollowUps(businessId: string) {
     .from(s.followUps)
     .where(and(eq(s.followUps.businessId, businessId), eq(s.followUps.status, "pending")))
     .orderBy(asc(s.followUps.scheduledFor))
-    .all();
+    .execute();
   const map = new Map<string, { scheduledFor: number; type: string }>();
   for (const r of rows) if (!map.has(r.leadId)) map.set(r.leadId, { scheduledFor: r.scheduledFor, type: r.type });
   return map;
@@ -487,13 +513,13 @@ export async function getNextFollowUps(businessId: string) {
 /** Set a lead's next follow-up by replacing its pending manual follow-ups. */
 export async function setNextFollowUp(businessId: string, leadId: string, scheduledFor: number, type: (typeof FOLLOWUP_TYPES)[number] = "sms") {
   const db = getDb();
-  db.transaction((tx) => {
-    tx.delete(s.followUps)
+  await withTransaction(async (tx) => {
+    await tx.delete(s.followUps)
       .where(and(eq(s.followUps.businessId, businessId), eq(s.followUps.leadId, leadId), eq(s.followUps.status, "pending"), eq(s.followUps.templateKey, "manual")))
-      .run();
-    tx.insert(s.followUps)
+      .execute();
+    await tx.insert(s.followUps)
       .values({ id: newId(), businessId, leadId, type, scheduledFor, templateKey: "manual", status: "pending", attempts: 0, createdAt: now(), updatedAt: now() })
-      .run();
+      .execute();
   });
 }
 
@@ -521,16 +547,16 @@ export async function listConversations(businessId: string, opts: { statuses?: s
   const conds: SQL[] = [eq(s.conversations.businessId, businessId)];
   if (opts.statuses?.length) conds.push(inArray(s.conversations.status, opts.statuses as (typeof s.CONVERSATION_STATUSES)[number][]));
   if (opts.leadIds?.length) conds.push(inArray(s.conversations.leadId, opts.leadIds));
-  const rows = db
+  const rows = await db
     .select({ conversation: s.conversations, lead: s.leads })
     .from(s.conversations)
     .leftJoin(s.leads, eq(s.conversations.leadId, s.leads.id))
     .where(and(...conds))
     .orderBy(desc(s.conversations.updatedAt))
-    .all();
+    .execute();
 
   // Last message per conversation — one grouped pass.
-  const lastMsgs = db
+  const lastMsgs = await db
     .select({
       conversationId: s.messages.conversationId,
       body: s.messages.body,
@@ -540,7 +566,7 @@ export async function listConversations(businessId: string, opts: { statuses?: s
     .from(s.messages)
     .where(eq(s.messages.businessId, businessId))
     .orderBy(asc(s.messages.createdAt))
-    .all();
+    .execute();
   const lastByConv = new Map<string, ConversationListItem["lastMessage"]>();
   for (const m of lastMsgs) lastByConv.set(m.conversationId, { body: m.body, sender: m.sender, createdAt: m.createdAt });
 
@@ -550,7 +576,7 @@ export async function listConversations(businessId: string, opts: { statuses?: s
 export async function updateConversation(businessId: string, id: string, patch: Partial<typeof s.conversations.$inferInsert>) {
   const existing = await getConversationById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.conversations).set({ ...patch, updatedAt: now() }).where(and(eq(s.conversations.id, id), eq(s.conversations.businessId, businessId))).run();
+  await getDb().update(s.conversations).set({ ...patch, updatedAt: now() }).where(and(eq(s.conversations.id, id), eq(s.conversations.businessId, businessId))).execute();
   return getConversationById(businessId, id);
 }
 
@@ -559,31 +585,31 @@ export async function updateConversation(businessId: string, id: string, patch: 
 // ---------------------------------------------------------------------------
 
 export async function createNotification(businessId: string, data: { userId?: string; kind?: string; title: string; body?: string }) {
-  getDb()
+  await getDb()
     .insert(s.notifications)
     .values({ id: newId(), businessId, userId: data.userId ?? null, kind: data.kind ?? "info", title: data.title, body: data.body ?? "", read: 0, createdAt: now() })
-    .run();
+    .execute();
 }
 
 export async function listNotifications(businessId: string, limit = 20) {
-  return getDb().select().from(s.notifications).where(eq(s.notifications.businessId, businessId)).orderBy(desc(s.notifications.createdAt)).limit(limit).all();
+  return await getDb().select().from(s.notifications).where(eq(s.notifications.businessId, businessId)).orderBy(desc(s.notifications.createdAt)).limit(limit).execute();
 }
 
 export async function countUnreadNotifications(businessId: string) {
-  const rows = getDb()
+  const rows = await getDb()
     .select({ n: count() })
     .from(s.notifications)
     .where(and(eq(s.notifications.businessId, businessId), eq(s.notifications.read, 0)))
-    .all();
+    .execute();
   return rows[0]?.n ?? 0;
 }
 
 export async function markNotificationRead(businessId: string, id: string) {
-  getDb().update(s.notifications).set({ read: 1 }).where(and(eq(s.notifications.id, id), eq(s.notifications.businessId, businessId))).run();
+  await getDb().update(s.notifications).set({ read: 1 }).where(and(eq(s.notifications.id, id), eq(s.notifications.businessId, businessId))).execute();
 }
 
 export async function markAllNotificationsRead(businessId: string) {
-  getDb().update(s.notifications).set({ read: 1 }).where(eq(s.notifications.businessId, businessId)).run();
+  await getDb().update(s.notifications).set({ read: 1 }).where(eq(s.notifications.businessId, businessId)).execute();
 }
 
 // ---------------------------------------------------------------------------
@@ -604,21 +630,21 @@ export interface NewAppointment {
 export async function createAppointment(a: NewAppointment) {
   const t = a.createdAt ?? now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.appointments)
     .values({ id, businessId: a.businessId, leadId: a.leadId ?? null, serviceId: a.serviceId ?? null, startAt: a.startAt, endAt: a.endAt, status: a.status ?? "booked", notes: a.notes ?? "", createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getAppointmentById(a.businessId, id);
 }
 
 export async function getAppointmentById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.appointments).where(and(eq(s.appointments.id, id), eq(s.appointments.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.appointments).where(and(eq(s.appointments.id, id), eq(s.appointments.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 /** Appointments overlapping [start, end) for a business — used to never double-book. */
 export async function listOverlappingAppointments(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.appointments)
     .where(
@@ -628,21 +654,21 @@ export async function listOverlappingAppointments(businessId: string, start: num
         sql`${s.appointments.status} NOT IN ('cancelled', 'no_show')`
       )
     )
-    .all();
+    .execute();
 }
 
 export async function listAppointmentsForLead(businessId: string, leadId: string) {
-  return getDb()
+  return await getDb()
     .select({ appointment: s.appointments, serviceName: s.services.name })
     .from(s.appointments)
     .leftJoin(s.services, eq(s.appointments.serviceId, s.services.id))
     .where(and(eq(s.appointments.businessId, businessId), eq(s.appointments.leadId, leadId)))
     .orderBy(desc(s.appointments.startAt))
-    .all();
+    .execute();
 }
 
 export async function listUpcomingAppointments(businessId: string, limit = 6) {
-  return getDb()
+  return await getDb()
     .select({
       appointment: s.appointments,
       leadName: s.leads.firstName,
@@ -655,15 +681,15 @@ export async function listUpcomingAppointments(businessId: string, limit = 6) {
     .where(and(eq(s.appointments.businessId, businessId), gte(s.appointments.startAt, now()), sql`${s.appointments.status} NOT IN ('cancelled', 'no_show')`))
     .orderBy(asc(s.appointments.startAt))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 export async function countAppointments(businessId: string) {
-  const rows = getDb()
+  const rows = await getDb()
     .select({ n: count() })
     .from(s.appointments)
     .where(and(eq(s.appointments.businessId, businessId), sql`${s.appointments.status} NOT IN ('cancelled', 'no_show')`))
-    .all();
+    .execute();
   return rows[0]?.n ?? 0;
 }
 
@@ -686,7 +712,7 @@ export async function listAppointments(
   } else if (scope === "past") {
     conds.push(sql`${s.appointments.startAt} < ${now()}`);
   }
-  return getDb()
+  return await getDb()
     .select({ appointment: s.appointments, lead: s.leads, serviceName: s.services.name })
     .from(s.appointments)
     .leftJoin(s.leads, eq(s.appointments.leadId, s.leads.id))
@@ -694,13 +720,13 @@ export async function listAppointments(
     .where(and(...conds))
     .orderBy(scope === "past" ? desc(s.appointments.startAt) : asc(s.appointments.startAt))
     .limit(opts.limit ?? 200)
-    .all();
+    .execute();
 }
 
 export async function updateAppointment(businessId: string, id: string, patch: Partial<typeof s.appointments.$inferInsert>) {
   const existing = await getAppointmentById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.appointments).set({ ...patch, updatedAt: now() }).where(and(eq(s.appointments.id, id), eq(s.appointments.businessId, businessId))).run();
+  await getDb().update(s.appointments).set({ ...patch, updatedAt: now() }).where(and(eq(s.appointments.id, id), eq(s.appointments.businessId, businessId))).execute();
   return getAppointmentById(businessId, id);
 }
 
@@ -711,26 +737,26 @@ export async function updateAppointment(businessId: string, id: string, patch: P
 export async function createFollowUp(businessId: string, data: { leadId: string; type: (typeof FOLLOWUP_TYPES)[number]; scheduledFor: number; templateKey?: string; status?: (typeof FOLLOWUP_STATUSES)[number] }) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.followUps)
     .values({ id, businessId, leadId: data.leadId, type: data.type, scheduledFor: data.scheduledFor, templateKey: data.templateKey ?? "", status: data.status ?? "pending", attempts: 0, createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return id;
 }
 
 export async function listFollowUps(businessId: string, limit = 50) {
-  return getDb().select().from(s.followUps).where(eq(s.followUps.businessId, businessId)).orderBy(asc(s.followUps.scheduledFor)).limit(limit).all();
+  return await getDb().select().from(s.followUps).where(eq(s.followUps.businessId, businessId)).orderBy(asc(s.followUps.scheduledFor)).limit(limit).execute();
 }
 
 export async function getFollowUpById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.followUps).where(and(eq(s.followUps.id, id), eq(s.followUps.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.followUps).where(and(eq(s.followUps.id, id), eq(s.followUps.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function updateFollowUp(businessId: string, id: string, patch: Partial<typeof s.followUps.$inferInsert>) {
   const existing = await getFollowUpById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.followUps).set({ ...patch, updatedAt: now() }).where(and(eq(s.followUps.id, id), eq(s.followUps.businessId, businessId))).run();
+  await getDb().update(s.followUps).set({ ...patch, updatedAt: now() }).where(and(eq(s.followUps.id, id), eq(s.followUps.businessId, businessId))).execute();
   return getFollowUpById(businessId, id);
 }
 
@@ -741,25 +767,25 @@ export interface FollowUpListItem {
 }
 
 export async function listFollowUpsWithLead(businessId: string, limit = 200): Promise<FollowUpListItem[]> {
-  return getDb()
+  return await getDb()
     .select({ followUp: s.followUps, lead: s.leads })
     .from(s.followUps)
     .leftJoin(s.leads, eq(s.followUps.leadId, s.leads.id))
     .where(eq(s.followUps.businessId, businessId))
     .orderBy(asc(s.followUps.scheduledFor))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Due pending follow-ups for the scheduler (oldest first). */
 export async function listDueFollowUps(limit = 100, nowMs = now()) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.followUps)
     .where(and(eq(s.followUps.status, "pending"), sql`${s.followUps.scheduledFor} <= ${nowMs}`))
     .orderBy(asc(s.followUps.scheduledFor))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Cancel a lead's not-yet-sent follow-ups (stop rules: booked / customer / opt-out / manual stop).
@@ -767,14 +793,14 @@ export async function listDueFollowUps(limit = 100, nowMs = now()) {
  *  never fire (Brain 3 — the engine re-checks the row at fire time too). */
 export async function cancelFollowUpsForLead(businessId: string, leadId: string, opts: { keep?: string[] } = {}) {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .select()
     .from(s.followUps)
     .where(and(eq(s.followUps.businessId, businessId), eq(s.followUps.leadId, leadId), sql`${s.followUps.status} IN ('pending', 'paused')`))
-    .all();
+    .execute();
   for (const r of rows) {
     if (opts.keep?.includes(r.templateKey ?? "")) continue;
-    db.update(s.followUps).set({ status: "cancelled", updatedAt: now() }).where(eq(s.followUps.id, r.id)).run();
+    await db.update(s.followUps).set({ status: "cancelled", updatedAt: now() }).where(eq(s.followUps.id, r.id)).execute();
   }
   if (rows.length) {
     await cancelAutomationRunsForLead(businessId, leadId);
@@ -802,7 +828,7 @@ export const DEFAULT_FOLLOWUP_STEPS: FollowUpStepConfig[] = [
 ];
 
 export async function getFollowUpConfig(businessId: string): Promise<FollowUpStepConfig[]> {
-  const rows = getDb().select().from(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, businessId)).all();
+  const rows = await getDb().select().from(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, businessId)).execute();
   if (!rows[0]) return DEFAULT_FOLLOWUP_STEPS.map((st) => ({ ...st }));
   try {
     const parsed = JSON.parse(rows[0].stepsJson) as FollowUpStepConfig[];
@@ -815,11 +841,11 @@ export async function getFollowUpConfig(businessId: string): Promise<FollowUpSte
 
 export async function saveFollowUpConfig(businessId: string, steps: FollowUpStepConfig[]) {
   const t = now();
-  const existing = getDb().select().from(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, businessId)).all();
+  const existing = await getDb().select().from(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, businessId)).execute();
   if (existing[0]) {
-    getDb().update(s.followUpConfigs).set({ stepsJson: JSON.stringify(steps), updatedAt: t }).where(eq(s.followUpConfigs.id, existing[0].id)).run();
+    await getDb().update(s.followUpConfigs).set({ stepsJson: JSON.stringify(steps), updatedAt: t }).where(eq(s.followUpConfigs.id, existing[0].id)).execute();
   } else {
-    getDb().insert(s.followUpConfigs).values({ id: newId(), businessId, stepsJson: JSON.stringify(steps), createdAt: t, updatedAt: t }).run();
+    await getDb().insert(s.followUpConfigs).values({ id: newId(), businessId, stepsJson: JSON.stringify(steps), createdAt: t, updatedAt: t }).execute();
   }
   return steps;
 }
@@ -857,7 +883,7 @@ export async function getDashboard(businessId: string): Promise<DashboardData> {
   const estimatedRevenueCents = await estimatedRevenueFromJobs(businessId);
 
   const [recentLeads, upcomingAppointments] = await Promise.all([
-    getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).orderBy(desc(s.leads.createdAt)).limit(6).all(),
+    getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).orderBy(desc(s.leads.createdAt)).limit(6).execute(),
     listUpcomingAppointments(businessId, 6),
   ]);
 
@@ -917,11 +943,11 @@ export async function getAnalytics(businessId: string): Promise<AnalyticsData> {
   const toDateStr = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
   // One pass over the business's leads for time/source/service aggregation.
-  const leadRows = db
+  const leadRows = await db
     .select({ createdAt: s.leads.createdAt, source: s.leads.source, serviceRequested: s.leads.serviceRequested })
     .from(s.leads)
     .where(eq(s.leads.businessId, businessId))
-    .all();
+    .execute();
 
   // Leads over the last N days (UTC day buckets, zero-filled).
   const todayStart = dayStartMs(new Date(nowMs));
@@ -963,8 +989,8 @@ export async function getAnalytics(businessId: string): Promise<AnalyticsData> {
     countAppointments(businessId),
     countLeadsByStatus(businessId, ["customer"]),
     estimatedRevenueFromJobs(businessId),
-    db.select({ n: count() }).from(s.messages).where(and(eq(s.messages.businessId, businessId), eq(s.messages.sender, "ai"))).all(),
-    db.select({ n: count() }).from(s.messages).where(and(eq(s.messages.businessId, businessId), eq(s.messages.sender, "employee"))).all(),
+    db.select({ n: count() }).from(s.messages).where(and(eq(s.messages.businessId, businessId), eq(s.messages.sender, "ai"))).execute(),
+    db.select({ n: count() }).from(s.messages).where(and(eq(s.messages.businessId, businessId), eq(s.messages.sender, "employee"))).execute(),
   ]);
 
   return {
@@ -990,7 +1016,7 @@ export async function getAnalytics(businessId: string): Promise<AnalyticsData> {
 // ---------------------------------------------------------------------------
 
 export async function logAgentAction(businessId: string, data: { agent: string; action: string; leadId?: string; input?: unknown; result?: unknown; success?: boolean }) {
-  getDb()
+  await getDb()
     .insert(s.agentActions)
     .values({
       id: newId(),
@@ -1003,22 +1029,22 @@ export async function logAgentAction(businessId: string, data: { agent: string; 
       success: data.success === false ? 0 : 1,
       createdAt: now(),
     })
-    .run();
+    .execute();
 }
 
 export async function audit(businessId: string | null, userId: string | null, action: string, entity = "", entityId = "", details: unknown = {}) {
-  getDb()
+  await getDb()
     .insert(s.auditLogs)
     .values({ id: newId(), businessId, userId, action, entity, entityId, detailsJson: JSON.stringify(details), createdAt: now() })
-    .run();
+    .execute();
 }
 
 export async function listAuditLogs(businessId: string, limit = 50) {
-  return getDb().select().from(s.auditLogs).where(eq(s.auditLogs.businessId, businessId)).orderBy(desc(s.auditLogs.createdAt)).limit(limit).all();
+  return await getDb().select().from(s.auditLogs).where(eq(s.auditLogs.businessId, businessId)).orderBy(desc(s.auditLogs.createdAt)).limit(limit).execute();
 }
 
 export async function listAgentActions(businessId: string, limit = 50) {
-  return getDb().select().from(s.agentActions).where(eq(s.agentActions.businessId, businessId)).orderBy(desc(s.agentActions.createdAt)).limit(limit).all();
+  return await getDb().select().from(s.agentActions).where(eq(s.agentActions.businessId, businessId)).orderBy(desc(s.agentActions.createdAt)).limit(limit).execute();
 }
 
 // ---------------------------------------------------------------------------
@@ -1037,7 +1063,7 @@ export interface NewHumanTask {
 export async function createHumanTask(data: NewHumanTask) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.humanTasks)
     .values({
       id,
@@ -1052,29 +1078,29 @@ export async function createHumanTask(data: NewHumanTask) {
       updatedAt: t,
       resolvedAt: null,
     })
-    .run();
+    .execute();
   return getHumanTaskById(data.businessId, id);
 }
 
 export async function getHumanTaskById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.humanTasks).where(and(eq(s.humanTasks.id, id), eq(s.humanTasks.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.humanTasks).where(and(eq(s.humanTasks.id, id), eq(s.humanTasks.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function listHumanTasks(businessId: string, limit = 100, status?: s.HumanTaskStatus) {
   const conds = [eq(s.humanTasks.businessId, businessId)];
   if (status) conds.push(eq(s.humanTasks.status, status));
-  return getDb().select().from(s.humanTasks).where(and(...conds)).orderBy(desc(s.humanTasks.createdAt)).limit(limit).all();
+  return await getDb().select().from(s.humanTasks).where(and(...conds)).orderBy(desc(s.humanTasks.createdAt)).limit(limit).execute();
 }
 
 export async function resolveHumanTask(businessId: string, id: string): Promise<typeof s.humanTasks.$inferSelect | null> {
   const existing = await getHumanTaskById(businessId, id);
   if (!existing) return null;
-  getDb()
+  await getDb()
     .update(s.humanTasks)
     .set({ status: "resolved", resolvedAt: now(), updatedAt: now() })
     .where(and(eq(s.humanTasks.id, id), eq(s.humanTasks.businessId, businessId)))
-    .run();
+    .execute();
   return getHumanTaskById(businessId, id);
 }
 
@@ -1102,7 +1128,7 @@ export const DEFAULT_WIDGET_SETTINGS = {
 
 /** Read a business's widget settings; returns defaults when no row exists (never writes). */
 export async function getWidgetSettings(businessId: string): Promise<WidgetSettings> {
-  const rows = getDb().select().from(s.widgetSettings).where(eq(s.widgetSettings.businessId, businessId)).all();
+  const rows = await getDb().select().from(s.widgetSettings).where(eq(s.widgetSettings.businessId, businessId)).execute();
   if (rows[0]) {
     return {
       id: rows[0].id,
@@ -1119,26 +1145,26 @@ export async function getWidgetSettings(businessId: string): Promise<WidgetSetti
 
 /** Create a row with defaults (idempotent) — used at business creation + seed. */
 export async function ensureWidgetSettings(businessId: string): Promise<WidgetSettings> {
-  const existing = getDb().select().from(s.widgetSettings).where(eq(s.widgetSettings.businessId, businessId)).all();
+  const existing = await getDb().select().from(s.widgetSettings).where(eq(s.widgetSettings.businessId, businessId)).execute();
   if (existing[0]) return getWidgetSettings(businessId);
   const t = now();
-  getDb()
+  await getDb()
     .insert(s.widgetSettings)
     .values({ id: newId(), businessId, ...DEFAULT_WIDGET_SETTINGS, createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getWidgetSettings(businessId);
 }
 
 export async function saveWidgetSettings(businessId: string, patch: { enabled?: number; primaryColor?: string; position?: s.WidgetPosition; welcomeMessage?: string; logoUrl?: string }) {
-  const existing = getDb().select().from(s.widgetSettings).where(eq(s.widgetSettings.businessId, businessId)).all();
+  const existing = await getDb().select().from(s.widgetSettings).where(eq(s.widgetSettings.businessId, businessId)).execute();
   const t = now();
   if (existing[0]) {
-    getDb().update(s.widgetSettings).set({ ...patch, updatedAt: t }).where(eq(s.widgetSettings.id, existing[0].id)).run();
+    await getDb().update(s.widgetSettings).set({ ...patch, updatedAt: t }).where(eq(s.widgetSettings.id, existing[0].id)).execute();
   } else {
-    getDb()
+    await getDb()
       .insert(s.widgetSettings)
       .values({ id: newId(), businessId, ...DEFAULT_WIDGET_SETTINGS, ...patch, createdAt: t, updatedAt: t })
-      .run();
+      .execute();
   }
   return getWidgetSettings(businessId);
 }
@@ -1272,7 +1298,7 @@ export interface NewUsageEvent {
   meta?: Record<string, unknown>;
 }
 export async function recordUsageEvent(businessId: string, data: NewUsageEvent): Promise<void> {
-  getDb()
+  await getDb()
     .insert(s.usageEvents)
     .values({
       id: newId(),
@@ -1285,7 +1311,7 @@ export async function recordUsageEvent(businessId: string, data: NewUsageEvent):
       metaJson: JSON.stringify(data.meta ?? {}),
       createdAt: now(),
     })
-    .run();
+    .execute();
 }
 export interface MonthlyUsage {
   aiMessages: number;
@@ -1302,11 +1328,11 @@ export interface MonthlyUsage {
 export async function getMonthlyUsage(businessId: string, startMs?: number): Promise<MonthlyUsage> {
   const start = startMs ?? usageMonthStartMs();
   const end = usageMonthEndMs(start);
-  const rows = getDb()
+  const rows = await getDb()
     .select()
     .from(s.usageEvents)
     .where(and(eq(s.usageEvents.businessId, businessId), gte(s.usageEvents.createdAt, start), lt(s.usageEvents.createdAt, end)))
-    .all();
+    .execute();
   const usage: MonthlyUsage = { aiMessages: 0, smsMessages: 0, voiceMessages: 0, inputTokens: 0, outputTokens: 0, estimatedCostCents: 0 };
   for (const r of rows) {
     if (r.kind === "ai_message") usage.aiMessages += 1;
@@ -1320,30 +1346,30 @@ export async function getMonthlyUsage(businessId: string, startMs?: number): Pro
 }
 /** Has any notification of this kind been created since `since`? (alert dedupe) */
 export async function hasNotificationSince(businessId: string, kind: string, since: number): Promise<boolean> {
-  const rows = getDb()
+  const rows = await getDb()
     .select({ id: s.notifications.id })
     .from(s.notifications)
     .where(and(eq(s.notifications.businessId, businessId), eq(s.notifications.kind, kind), gte(s.notifications.createdAt, since)))
     .limit(1)
-    .all();
+    .execute();
   return rows.length > 0;
 }
 export async function listIntegrations(businessId: string) {
-  return getDb().select().from(s.integrations).where(eq(s.integrations.businessId, businessId)).all();
+  return await getDb().select().from(s.integrations).where(eq(s.integrations.businessId, businessId)).execute();
 }
 
 export async function setIntegrationStatus(businessId: string, provider: (typeof INTEGRATION_PROVIDERS)[number], status: (typeof s.INTEGRATION_STATUSES)[number], config: unknown = {}) {
-  const existing = getDb().select().from(s.integrations).where(and(eq(s.integrations.businessId, businessId), eq(s.integrations.provider, provider))).all();
+  const existing = await getDb().select().from(s.integrations).where(and(eq(s.integrations.businessId, businessId), eq(s.integrations.provider, provider))).execute();
   const t = now();
   if (existing[0]) {
-    getDb().update(s.integrations).set({ status, configJson: JSON.stringify(config), updatedAt: t }).where(eq(s.integrations.id, existing[0].id)).run();
+    await getDb().update(s.integrations).set({ status, configJson: JSON.stringify(config), updatedAt: t }).where(eq(s.integrations.id, existing[0].id)).execute();
   } else {
-    getDb().insert(s.integrations).values({ id: newId(), businessId, provider, status, configJson: JSON.stringify(config), createdAt: t, updatedAt: t }).run();
+    await getDb().insert(s.integrations).values({ id: newId(), businessId, provider, status, configJson: JSON.stringify(config), createdAt: t, updatedAt: t }).execute();
   }
 }
 
 export async function getSubscription(businessId: string) {
-  const rows = getDb().select().from(s.subscriptions).where(eq(s.subscriptions.businessId, businessId)).all();
+  const rows = await getDb().select().from(s.subscriptions).where(eq(s.subscriptions.businessId, businessId)).execute();
   return rows[0] ?? null;
 }
 
@@ -1351,9 +1377,9 @@ export async function setSubscriptionPlan(businessId: string, plan: (typeof PLAN
   const existing = await getSubscription(businessId);
   const t = now();
   if (existing) {
-    getDb().update(s.subscriptions).set({ plan, status: status ?? existing.status, updatedAt: t }).where(eq(s.subscriptions.businessId, businessId)).run();
+    await getDb().update(s.subscriptions).set({ plan, status: status ?? existing.status, updatedAt: t }).where(eq(s.subscriptions.businessId, businessId)).execute();
   } else {
-    getDb().insert(s.subscriptions).values({ id: newId(), businessId, plan, status: status ?? "trialing", createdAt: t, updatedAt: t }).run();
+    await getDb().insert(s.subscriptions).values({ id: newId(), businessId, plan, status: status ?? "trialing", createdAt: t, updatedAt: t }).execute();
   }
   return getSubscription(businessId);
 }
@@ -1372,7 +1398,7 @@ export async function createEvent(data: {
 }) {
   const t = data.createdAt ?? now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.events)
     .values({
       id,
@@ -1383,7 +1409,7 @@ export async function createEvent(data: {
       payloadJson: JSON.stringify(data.payload ?? {}),
       createdAt: t,
     })
-    .run();
+    .execute();
   return id;
 }
 
@@ -1391,19 +1417,19 @@ export async function listEvents(businessId: string, opts: { types?: s.EventType
   const conds: SQL[] = [eq(s.events.businessId, businessId)];
   if (opts.types?.length) conds.push(inArray(s.events.type, opts.types));
   if (opts.since !== undefined) conds.push(gte(s.events.createdAt, opts.since));
-  return getDb()
+  return await getDb()
     .select()
     .from(s.events)
     .where(and(...conds))
     .orderBy(desc(s.events.createdAt))
     .limit(opts.limit ?? 200)
-    .all();
+    .execute();
 }
 
 export async function countEventsOfType(businessId: string, type: s.EventType, since?: number) {
   const conds: SQL[] = [eq(s.events.businessId, businessId), eq(s.events.type, type)];
   if (since !== undefined) conds.push(gte(s.events.createdAt, since));
-  const rows = getDb().select({ n: count() }).from(s.events).where(and(...conds)).all();
+  const rows = await getDb().select({ n: count() }).from(s.events).where(and(...conds)).execute();
   return rows[0]?.n ?? 0;
 }
 
@@ -1422,7 +1448,7 @@ export interface AutomationRuleInput {
 export async function createAutomationRule(businessId: string, data: AutomationRuleInput) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.automationRules)
     .values({
       id,
@@ -1437,43 +1463,43 @@ export async function createAutomationRule(businessId: string, data: AutomationR
       createdAt: t,
       updatedAt: t,
     })
-    .run();
+    .execute();
   return getAutomationRuleById(businessId, id);
 }
 
 export async function getAutomationRuleById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.automationRules).where(and(eq(s.automationRules.id, id), eq(s.automationRules.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.automationRules).where(and(eq(s.automationRules.id, id), eq(s.automationRules.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function listAutomationRules(businessId: string) {
-  return getDb().select().from(s.automationRules).where(eq(s.automationRules.businessId, businessId)).orderBy(asc(s.automationRules.createdAt)).all();
+  return await getDb().select().from(s.automationRules).where(eq(s.automationRules.businessId, businessId)).orderBy(asc(s.automationRules.createdAt)).execute();
 }
 
 export async function countAutomationRules(businessId: string) {
-  const rows = getDb().select({ n: count() }).from(s.automationRules).where(eq(s.automationRules.businessId, businessId)).all();
+  const rows = await getDb().select({ n: count() }).from(s.automationRules).where(eq(s.automationRules.businessId, businessId)).execute();
   return rows[0]?.n ?? 0;
 }
 
 export async function updateAutomationRule(businessId: string, id: string, patch: Partial<typeof s.automationRules.$inferInsert>) {
   const existing = await getAutomationRuleById(businessId, id);
   if (!existing) return null;
-  getDb()
+  await getDb()
     .update(s.automationRules)
     .set({ ...patch, updatedAt: now() })
     .where(and(eq(s.automationRules.id, id), eq(s.automationRules.businessId, businessId)))
-    .run();
+    .execute();
   return getAutomationRuleById(businessId, id);
 }
 
 /** Enabled rules subscribed to an event (spec §30: agents subscribe to events). */
 export async function getAutomationRulesForEvent(businessId: string, eventType: s.EventType) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.automationRules)
     .where(and(eq(s.automationRules.businessId, businessId), eq(s.automationRules.triggerEvent, eventType), eq(s.automationRules.enabled, 1)))
     .orderBy(asc(s.automationRules.createdAt))
-    .all();
+    .execute();
 }
 
 // --- automation runs --------------------------------------------------------
@@ -1491,7 +1517,7 @@ export interface NewAutomationRun {
 export async function createAutomationRun(data: NewAutomationRun) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.automationRuns)
     .values({
       id,
@@ -1507,79 +1533,79 @@ export async function createAutomationRun(data: NewAutomationRun) {
       createdAt: t,
       updatedAt: t,
     })
-    .run();
+    .execute();
   return getAutomationRunById(data.businessId, id);
 }
 
 export async function getAutomationRunById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.automationRuns).where(and(eq(s.automationRuns.id, id), eq(s.automationRuns.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.automationRuns).where(and(eq(s.automationRuns.id, id), eq(s.automationRuns.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function updateAutomationRun(businessId: string, id: string, patch: Partial<typeof s.automationRuns.$inferInsert>) {
   const existing = await getAutomationRunById(businessId, id);
   if (!existing) return null;
-  getDb()
+  await getDb()
     .update(s.automationRuns)
     .set({ ...patch, updatedAt: now() })
     .where(and(eq(s.automationRuns.id, id), eq(s.automationRuns.businessId, businessId)))
-    .run();
+    .execute();
   return getAutomationRunById(businessId, id);
 }
 
 export async function listAutomationRuns(businessId: string, limit = 200) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.automationRuns)
     .where(eq(s.automationRuns.businessId, businessId))
     .orderBy(desc(s.automationRuns.createdAt))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Due pending runs for the worker (oldest first) — delayed/scheduled runs
  *  survive restarts because they are picked from the DB on every tick. */
 export async function listDueAutomationRuns(limit = 100, nowMs = now()) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.automationRuns)
     .where(and(eq(s.automationRuns.status, "pending"), sql`${s.automationRuns.runAt} <= ${nowMs}`))
     .orderBy(asc(s.automationRuns.runAt))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Stale `running` rows (a process died mid-run) get retried or failed. */
 export async function listStuckAutomationRuns(limit = 50) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.automationRuns)
     .where(eq(s.automationRuns.status, "running"))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** The follow-up step run for a follow_up row (payload carries the followUpId). */
 export async function getRunForFollowUp(followUpId: string) {
-  const rows = getDb()
+  const rows = await getDb()
     .select()
     .from(s.automationRuns)
     .where(sql`${s.automationRuns.payloadJson} LIKE ${`%${followUpId}%`}`)
     .limit(10)
-    .all();
+    .execute();
   return rows[0] ?? null;
 }
 
 /** All pending follow-up rows (the backfill safety net creates a run for any
  *  pre-Brain-3 row that was scheduled before the automation engine existed). */
 export async function listPendingFollowUps(limit = 500) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.followUps)
     .where(eq(s.followUps.status, "pending"))
     .orderBy(asc(s.followUps.scheduledFor))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Cancel a lead's pending automation runs (stop rules: booked / customer /
@@ -1587,13 +1613,13 @@ export async function listPendingFollowUps(limit = 500) {
  *  follow_up rows by cancelFollowUpsForLead. */
 export async function cancelAutomationRunsForLead(businessId: string, leadId: string) {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .select()
     .from(s.automationRuns)
     .where(and(eq(s.automationRuns.businessId, businessId), eq(s.automationRuns.leadId, leadId), inArray(s.automationRuns.status, ["pending", "running"])))
-    .all();
+    .execute();
   for (const r of rows) {
-    db.update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, r.id)).run();
+    await db.update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, r.id)).execute();
   }
   return rows.length;
 }
@@ -1617,7 +1643,7 @@ export const DEFAULT_REVIEW_CONFIG: Omit<ReviewConfig, "id" | "businessId"> = {
 };
 
 export async function getReviewConfig(businessId: string): Promise<ReviewConfig> {
-  const rows = getDb().select().from(s.reviewConfigs).where(eq(s.reviewConfigs.businessId, businessId)).all();
+  const rows = await getDb().select().from(s.reviewConfigs).where(eq(s.reviewConfigs.businessId, businessId)).execute();
   if (rows[0]) {
     return {
       id: rows[0].id,
@@ -1632,13 +1658,13 @@ export async function getReviewConfig(businessId: string): Promise<ReviewConfig>
 
 /** Create a review config row with defaults when absent (idempotent — never overwrites). */
 export async function ensureReviewConfig(businessId: string): Promise<ReviewConfig> {
-  const existing = getDb().select().from(s.reviewConfigs).where(eq(s.reviewConfigs.businessId, businessId)).all();
+  const existing = await getDb().select().from(s.reviewConfigs).where(eq(s.reviewConfigs.businessId, businessId)).execute();
   if (existing[0]) return getReviewConfig(businessId);
   const t = now();
-  getDb()
+  await getDb()
     .insert(s.reviewConfigs)
     .values({ id: newId(), businessId, ...DEFAULT_REVIEW_CONFIG, createdAt: t, updatedAt: t })
-    .run();
+    .execute();
   return getReviewConfig(businessId);
 }
 
@@ -1650,11 +1676,11 @@ export async function saveReviewConfig(businessId: string, patch: { enabled?: bo
     delayDays: patch.delayDays !== undefined ? Math.max(0, Math.min(90, Math.round(patch.delayDays))) : current.delayDays,
     reviewUrl: patch.reviewUrl !== undefined ? patch.reviewUrl.trim().slice(0, 500) : current.reviewUrl,
   };
-  getDb()
+  await getDb()
     .update(s.reviewConfigs)
     .set({ ...next, updatedAt: t })
     .where(eq(s.reviewConfigs.businessId, businessId))
-    .run();
+    .execute();
   return getReviewConfig(businessId);
 }
 
@@ -1668,7 +1694,7 @@ export interface NewReview {
 export async function createReview(data: NewReview) {
   const t = now();
   const id = newId();
-  getDb()
+  await getDb()
     .insert(s.reviews)
     .values({
       id,
@@ -1682,23 +1708,23 @@ export async function createReview(data: NewReview) {
       createdAt: t,
       updatedAt: t,
     })
-    .run();
+    .execute();
   return getReviewById(data.businessId, id);
 }
 
 export async function getReviewById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.reviews).where(and(eq(s.reviews.id, id), eq(s.reviews.businessId, businessId))).all();
+  const rows = await getDb().select().from(s.reviews).where(and(eq(s.reviews.id, id), eq(s.reviews.businessId, businessId))).execute();
   return rows[0] ?? null;
 }
 
 export async function getReviewForAppointment(businessId: string, appointmentId: string) {
-  const rows = getDb().select().from(s.reviews).where(and(eq(s.reviews.businessId, businessId), eq(s.reviews.appointmentId, appointmentId))).all();
+  const rows = await getDb().select().from(s.reviews).where(and(eq(s.reviews.businessId, businessId), eq(s.reviews.appointmentId, appointmentId))).execute();
   return rows[0] ?? null;
 }
 
 /** The open feedback record for a lead: a request was sent, no feedback yet. */
 export async function getOpenReviewForLead(businessId: string, leadId: string) {
-  const rows = getDb()
+  const rows = await getDb()
     .select()
     .from(s.reviews)
     .where(
@@ -1711,14 +1737,14 @@ export async function getOpenReviewForLead(businessId: string, leadId: string) {
     )
     .orderBy(desc(s.reviews.createdAt))
     .limit(1)
-    .all();
+    .execute();
   return rows[0] ?? null;
 }
 
 export async function updateReview(businessId: string, id: string, patch: Partial<typeof s.reviews.$inferInsert>) {
   const existing = await getReviewById(businessId, id);
   if (!existing) return null;
-  getDb().update(s.reviews).set({ ...patch, updatedAt: now() }).where(and(eq(s.reviews.id, id), eq(s.reviews.businessId, businessId))).run();
+  await getDb().update(s.reviews).set({ ...patch, updatedAt: now() }).where(and(eq(s.reviews.id, id), eq(s.reviews.businessId, businessId))).execute();
   return getReviewById(businessId, id);
 }
 
@@ -1730,7 +1756,7 @@ export interface ReviewListItem {
 }
 
 export async function listReviews(businessId: string, limit = 100): Promise<ReviewListItem[]> {
-  return getDb()
+  return await getDb()
     .select({ review: s.reviews, lead: s.leads, serviceName: s.services.name })
     .from(s.reviews)
     .leftJoin(s.leads, eq(s.reviews.leadId, s.leads.id))
@@ -1739,7 +1765,7 @@ export async function listReviews(businessId: string, limit = 100): Promise<Revi
     .where(eq(s.reviews.businessId, businessId))
     .orderBy(desc(s.reviews.createdAt))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 // ---------------------------------------------------------------------------
@@ -1747,23 +1773,23 @@ export async function listReviews(businessId: string, limit = 100): Promise<Revi
 // ---------------------------------------------------------------------------
 
 export async function getWeeklyReport(businessId: string, weekStart: number) {
-  const rows = getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.weekStart, weekStart))).all();
+  const rows = await getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.weekStart, weekStart))).execute();
   return rows[0] ?? null;
 }
 
 export async function getWeeklyReportById(businessId: string, id: string) {
-  const rows = getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.id, id))).all();
+  const rows = await getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.id, id))).execute();
   return rows[0] ?? null;
 }
 
 export async function listWeeklyReports(businessId: string, limit = 12) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.businessReports)
     .where(eq(s.businessReports.businessId, businessId))
     .orderBy(desc(s.businessReports.weekStart))
     .limit(limit)
-    .all();
+    .execute();
 }
 
 /** Upsert a weekly report for a business+week (idempotent — regenerating a
@@ -1772,17 +1798,17 @@ export async function upsertWeeklyReport(businessId: string, weekStart: number, 
   const t = now();
   const existing = await getWeeklyReport(businessId, weekStart);
   if (existing) {
-    getDb()
+    await getDb()
       .update(s.businessReports)
       .set({ metricsJson: JSON.stringify(metrics), narrativeJson: JSON.stringify(narrative), createdAt: t })
       .where(eq(s.businessReports.id, existing.id))
-      .run();
+      .execute();
     return getWeeklyReport(businessId, weekStart)!;
   }
-  getDb()
+  await getDb()
     .insert(s.businessReports)
     .values({ id: newId(), businessId, weekStart, metricsJson: JSON.stringify(metrics), narrativeJson: JSON.stringify(narrative), createdAt: t })
-    .run();
+    .execute();
   return getWeeklyReport(businessId, weekStart)!;
 }
 
@@ -1791,52 +1817,52 @@ export async function upsertWeeklyReport(businessId: string, weekStart: number, 
 // ---------------------------------------------------------------------------
 
 export async function listLeadsCreatedBetween(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.leads)
     .where(and(eq(s.leads.businessId, businessId), gte(s.leads.createdAt, start), sql`${s.leads.createdAt} < ${end}`))
-    .all();
+    .execute();
 }
 
 export async function listAppointmentsCreatedBetween(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.appointments)
     .where(and(eq(s.appointments.businessId, businessId), gte(s.appointments.createdAt, start), sql`${s.appointments.createdAt} < ${end}`))
-    .all();
+    .execute();
 }
 
 export async function listMessagesBetween(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.messages)
     .where(and(eq(s.messages.businessId, businessId), gte(s.messages.createdAt, start), sql`${s.messages.createdAt} < ${end}`))
     .orderBy(asc(s.messages.createdAt))
-    .all();
+    .execute();
 }
 
 export async function listConversationsBetween(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.conversations)
     .where(and(eq(s.conversations.businessId, businessId), gte(s.conversations.createdAt, start), sql`${s.conversations.createdAt} < ${end}`))
-    .all();
+    .execute();
 }
 
 export async function listFollowUpsBetween(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.followUps)
     .where(and(eq(s.followUps.businessId, businessId), gte(s.followUps.scheduledFor, start), sql`${s.followUps.scheduledFor} < ${end}`))
-    .all();
+    .execute();
 }
 
 export async function listReviewsBetween(businessId: string, start: number, end: number) {
-  return getDb()
+  return await getDb()
     .select()
     .from(s.reviews)
     .where(and(eq(s.reviews.businessId, businessId), gte(s.reviews.reviewRequestSentAt ?? 0, start), sql`${s.reviews.reviewRequestSentAt ?? 0} < ${end}`))
-    .all();
+    .execute();
 }
 
 export type { SQL };

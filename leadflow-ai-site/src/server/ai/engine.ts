@@ -80,7 +80,7 @@ export async function startConversation(
     leadId = lead.id;
   }
 
-  const existing = await repo.listConversations(businessId, { leadIds: [leadId] });
+  const existing = await repo.listConversations(businessId, { leadIds: leadId ? [leadId] : [] });
   const active = existing.find((c) => c.conversation.status !== "closed");
   let conversation;
   // autoRespond (owner AI config): when off, new conversations start
@@ -91,7 +91,7 @@ export async function startConversation(
     conversation = active.conversation;
   } else {
     conversation = await repo.createConversation(businessId, {
-      leadId,
+      leadId: leadId ?? undefined,
       channel: opts.channel ?? "chat",
       status: autoRespond ? "ai_handling" : "active",
       aiEnabled: autoRespond ? 1 : 0,

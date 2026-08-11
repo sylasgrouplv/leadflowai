@@ -10,3 +10,11 @@ export default defineConfig({
   schema: "./src/server/db/schema.ts",
   out: "./drizzle",
 });
+
+// Postgres (production) — `bunx drizzle-kit push --config=drizzle.pg.config.ts`
+export const pg = {
+  dialect: "postgresql" as const,
+  schema: "./src/server/db/schema.pg.ts",
+  out: "./drizzle/pg",
+  dbCredentials: { url: process.env.DATABASE_URL ?? "" },
+};

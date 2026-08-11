@@ -72,48 +72,48 @@ async function chat(convId: string, body: string) {
   const last = aiReplies.at(-1) ?? "";
   return { status: r.status, last, bundle: r.json.bundle ?? r.json };
 }
-function dbCount(kind: string): number {
+async function dbCount(kind: string): Promise<number> {
   const db = getDb();
   switch (kind) {
     case "usage_ai":
-      return db.select().from(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).all().filter((e) => e.kind === "ai_message").length;
+      return (await db.select().from(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).execute()).filter((e) => e.kind === "ai_message").length;
     case "usage_sms":
-      return db.select().from(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).all().filter((e) => e.kind === "sms").length;
+      return (await db.select().from(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).execute()).filter((e) => e.kind === "sms").length;
     case "notif":
-      return db.select().from(s.notifications).where(eq(s.notifications.businessId, businessId)).all().length;
+      return (await db.select().from(s.notifications).where(eq(s.notifications.businessId, businessId)).execute()).length;
     default:
       return 0;
   }
 }
 async function notifKinds(): Promise<string[]> {
-  return getDb().select().from(s.notifications).where(eq(s.notifications.businessId, businessId)).all().map((n) => n.kind);
+  return (await getDb().select().from(s.notifications).where(eq(s.notifications.businessId, businessId)).execute()).map((n) => n.kind);
 }
 
 /** Delete every row a test business owns (tenant-scoped), mirroring cleanup. */
-function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
-  for (const lead of db.select({ id: s.leads.id }).from(s.leads).where(eq(s.leads.businessId, id)).all()) {
-    for (const a of db.select().from(s.appointments).where(eq(s.appointments.leadId, lead.id)).all()) db.delete(s.appointments).where(eq(s.appointments.id, a.id)).run();
-    db.delete(s.followUps).where(eq(s.followUps.leadId, lead.id)).run();
-    for (const c of db.select().from(s.conversations).where(eq(s.conversations.leadId, lead.id)).all()) {
-      db.delete(s.messages).where(eq(s.messages.conversationId, c.id)).run();
-      db.delete(s.conversations).where(eq(s.conversations.id, c.id)).run();
+async function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
+  for (const lead of await db.select({ id: s.leads.id }).from(s.leads).where(eq(s.leads.businessId, id)).execute()) {
+    for (const a of await db.select().from(s.appointments).where(eq(s.appointments.leadId, lead.id)).execute()) await db.delete(s.appointments).where(eq(s.appointments.id, a.id)).execute();
+    await db.delete(s.followUps).where(eq(s.followUps.leadId, lead.id)).execute();
+    for (const c of await db.select().from(s.conversations).where(eq(s.conversations.leadId, lead.id)).execute()) {
+      await db.delete(s.messages).where(eq(s.messages.conversationId, c.id)).execute();
+      await db.delete(s.conversations).where(eq(s.conversations.id, c.id)).execute();
     }
-    db.delete(s.agentActions).where(eq(s.agentActions.leadId, lead.id)).run();
-    db.delete(s.leads).where(eq(s.leads.id, lead.id)).run();
+    await db.delete(s.agentActions).where(eq(s.agentActions.leadId, lead.id)).execute();
+    await db.delete(s.leads).where(eq(s.leads.id, lead.id)).execute();
   }
-  db.delete(s.services).where(eq(s.services.businessId, id)).run();
-  db.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, id)).run();
-  db.delete(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, id)).run();
-  db.delete(s.notifications).where(eq(s.notifications.businessId, id)).run();
-  db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, id)).run();
-  db.delete(s.auditLogs).where(eq(s.auditLogs.businessId, id)).run();
-  db.delete(s.widgetSettings).where(eq(s.widgetSettings.businessId, id)).run();
-  db.delete(s.integrations).where(eq(s.integrations.businessId, id)).run();
-  db.delete(s.subscriptions).where(eq(s.subscriptions.businessId, id)).run();
-  db.delete(s.events).where(eq(s.events.businessId, id)).run();
-  db.delete(s.automationRuns).where(eq(s.automationRuns.businessId, id)).run();
-  db.delete(s.reviews).where(eq(s.reviews.businessId, id)).run();
-  db.delete(s.businesses).where(eq(s.businesses.id, id)).run();
+  await db.delete(s.services).where(eq(s.services.businessId, id)).execute();
+  await db.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, id)).execute();
+  await db.delete(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, id)).execute();
+  await db.delete(s.notifications).where(eq(s.notifications.businessId, id)).execute();
+  await db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, id)).execute();
+  await db.delete(s.auditLogs).where(eq(s.auditLogs.businessId, id)).execute();
+  await db.delete(s.widgetSettings).where(eq(s.widgetSettings.businessId, id)).execute();
+  await db.delete(s.integrations).where(eq(s.integrations.businessId, id)).execute();
+  await db.delete(s.subscriptions).where(eq(s.subscriptions.businessId, id)).execute();
+  await db.delete(s.events).where(eq(s.events.businessId, id)).execute();
+  await db.delete(s.automationRuns).where(eq(s.automationRuns.businessId, id)).execute();
+  await db.delete(s.reviews).where(eq(s.reviews.businessId, id)).execute();
+  await db.delete(s.businesses).where(eq(s.businesses.id, id)).execute();
 }
 
 (async () => {
@@ -123,13 +123,13 @@ function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
   // carry over between runs. Fresh runs are fully isolated either way.
   {
     const db = getDb();
-    for (const b of db.select().from(s.businesses).where(eq(s.businesses.name, "Brain5 Plumbing Co")).all()) {
-      for (const tm of db.select().from(s.teamMembers).where(eq(s.teamMembers.businessId, b.id)).all()) {
-        db.delete(s.sessions).where(eq(s.sessions.userId, tm.userId)).run();
-        db.delete(s.teamMembers).where(eq(s.teamMembers.userId, tm.userId)).run();
-        db.delete(s.users).where(eq(s.users.id, tm.userId)).run();
+    for (const b of await db.select().from(s.businesses).where(eq(s.businesses.name, "Brain5 Plumbing Co")).execute()) {
+      for (const tm of await db.select().from(s.teamMembers).where(eq(s.teamMembers.businessId, b.id)).execute()) {
+        await db.delete(s.sessions).where(eq(s.sessions.userId, tm.userId)).execute();
+        await db.delete(s.teamMembers).where(eq(s.teamMembers.userId, tm.userId)).execute();
+        await db.delete(s.users).where(eq(s.users.id, tm.userId)).execute();
       }
-      wipeBusiness(db, b.id);
+      await wipeBusiness(db, b.id);
     }
   }
   // ---------------------------------------------------------------- signup
@@ -205,25 +205,26 @@ function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
     await chat(convId, "My name is Dana, my phone is 555-0100, I live in 62701 and need AC repair");
     await chat(convId, "How much does a new AC unit cost?");
     await chat(convId, "Do you offer financing?");
-    const ai = dbCount("usage_ai");
+    const ai = await dbCount("usage_ai");
     pass("D1 usage recorded per AI reply", ai >= 3, `${ai} ai_message events`);
     const db = getDb();
-    const sample = db.select().from(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).all().find((e) => e.kind === "ai_message");
+    const sample = (await db.select().from(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).execute()).find((e) => e.kind === "ai_message");
     pass("D2 deterministic tokens + cost", !!sample && sample.inputTokens > 0 && sample.outputTokens > 0 && sample.estimatedCostCents >= 1, sample ? `in=${sample.inputTokens} out=${sample.outputTokens} cost=${sample.estimatedCostCents}c` : "no event");
   }
 
   // ------------------------------------------------ G) SMS usage recording
   {
-    const lead = getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).all()[0];
+    const lead = (await getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).execute())[0];
     await recordSmsUsage({ businessId, leadId: lead?.id, agent: "test", body: "Brain5 SMS test" });
-    pass("G1 SMS usage recorded", dbCount("usage_sms") >= 1, `${dbCount("usage_sms")} sms events`);
+    const smsCount = await dbCount("usage_sms");
+    pass("G1 SMS usage recorded", smsCount >= 1, `${smsCount} sms events`);
   }
 
   // ------------------------------------------------ E+F) budget alerts + runaway
   {
     const db = getDb();
-    db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).run();
-    db.delete(s.notifications).where(eq(s.notifications.businessId, businessId)).run();
+    await db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, businessId)).execute();
+    await db.delete(s.notifications).where(eq(s.notifications.businessId, businessId)).execute();
   }
   await api("/api/ai/config", { method: "PUT", body: { monthlyBudgetCents: 15 } });
   {
@@ -244,7 +245,7 @@ function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
     // pause must show up in that message's bundle and persist to the row.
     const paused = await chat(convId, "hello");
     pass("E3 conversation paused at 100% (aiEnabled=0)", paused.bundle.ai?.active === false, `active=${paused.bundle.ai?.active}`);
-    const conv = getDb().select().from(s.conversations).where(eq(s.conversations.id, convId)).all()[0];
+    const conv = (await getDb().select().from(s.conversations).where(eq(s.conversations.id, convId)).execute())[0];
     pass("E3b aiEnabled=0 persisted", conv?.aiEnabled === 0, `aiEnabled=${conv?.aiEnabled}`);
     const { convId: conv2 } = await newConversation();
     const b = await api(`/api/chat/conversations/${conv2}`);
@@ -252,9 +253,9 @@ function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
     pass("F1 new conversation starts human-held (no AI welcome)", bb1.ai?.active === false, `active=${bb1.ai?.active}`);
     const msgs2: { sender: string; body: string }[] = bb1.messages ?? [];
     pass("F2 system note explains the pause", msgs2.some((m) => m.sender === "system" && /budget/i.test(m.body)), msgs2.map((m) => m.sender).join(","));
-    const before = dbCount("notif");
+    const before = await dbCount("notif");
     await chat(conv2, "hello");
-    const after = dbCount("notif");
+    const after = await dbCount("notif");
     pass("F3 no alert spam while paused", after === before, `${before} -> ${after}`);
   }
   await api("/api/ai/config", { method: "PUT", body: { monthlyBudgetCents: 100000 } });
@@ -270,21 +271,21 @@ function wipeBusiness(db: ReturnType<typeof getDb>, id: string) {
 })();
 
 // ------------------------------------------------------------------ cleanup
-process.on("exit", () => {
+process.on("beforeExit", async () => {
   try {
     const db = getDb();
     if (businessId) {
-      for (const tm of db.select().from(s.teamMembers).where(eq(s.teamMembers.businessId, businessId)).all()) {
-        db.delete(s.sessions).where(eq(s.sessions.userId, tm.userId)).run();
-        db.delete(s.teamMembers).where(eq(s.teamMembers.userId, tm.userId)).run();
-        db.delete(s.users).where(eq(s.users.id, tm.userId)).run();
+      for (const tm of await db.select().from(s.teamMembers).where(eq(s.teamMembers.businessId, businessId)).execute()) {
+        await db.delete(s.sessions).where(eq(s.sessions.userId, tm.userId)).execute();
+        await db.delete(s.teamMembers).where(eq(s.teamMembers.userId, tm.userId)).execute();
+        await db.delete(s.users).where(eq(s.users.id, tm.userId)).execute();
       }
-      wipeBusiness(db, businessId);
+      await wipeBusiness(db, businessId);
     }
     if (userId) {
-      db.delete(s.sessions).where(eq(s.sessions.userId, userId)).run();
-      db.delete(s.teamMembers).where(eq(s.teamMembers.userId, userId)).run();
-      db.delete(s.users).where(eq(s.users.id, userId)).run();
+      await db.delete(s.sessions).where(eq(s.sessions.userId, userId)).execute();
+      await db.delete(s.teamMembers).where(eq(s.teamMembers.userId, userId)).execute();
+      await db.delete(s.users).where(eq(s.users.id, userId)).execute();
     }
     console.log("cleanup done");
   } catch {
