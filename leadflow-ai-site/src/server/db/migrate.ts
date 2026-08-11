@@ -1,18 +1,18 @@
 /**
  * Migration runner — dual dialect.
- *  - Postgres (DATABASE_URL set): applies drizzle/pg/*.sql in order via
- *    postgres.js, tracked in the drizzle_migrations ledger table.
+ *  - Postgres (DATABASE_URL set): applies the embedded PG migrations in order
+ *    (see pg-migrations.generated.ts — generated from drizzle/pg/*.sql so the
+ *    runner works on serverless runtimes where the repo folder isn't bundled),
+ *    tracked in the drizzle_migrations ledger table.
  *  - SQLite (no DATABASE_URL): drizzle's bun-sqlite migrator over drizzle/.
  *  Both are idempotent and safe to run at every boot.
  */
 import { getDb, getPgClient, isPgMode } from "./client";
-import { migrate as migrateSqlite } from "drizzle-orm/bun-sqlite/migrator";
+import { PG_MIGRATIONS } from "./pg-migrations.generated";
 import path from "node:path";
-import { readdirSync, readFileSync } from "node:fs";
 import { SITE_ROOT } from "../env";
 
 const SQLITE_FOLDER = path.join(SITE_ROOT, "drizzle");
-const PG_FOLDER = path.join(SITE_ROOT, "drizzle", "pg");
 let _done = false;
 
 export async function runMigrations(): Promise<void> {
@@ -26,17 +26,20 @@ export async function runMigrations(): Promise<void> {
     )`;
     const rows = await pg`SELECT name FROM drizzle_migrations`;
     const applied = new Set(rows.map((r) => r.name));
-    for (const f of readdirSync(PG_FOLDER).filter((f) => f.endsWith(".sql")).sort()) {
-      if (applied.has(f)) continue;
-      const sqlText = readFileSync(path.join(PG_FOLDER, f), "utf8");
-      await pg.unsafe(sqlText);
-      await pg`INSERT INTO drizzle_migrations (name) VALUES (${f}) ON CONFLICT (name) DO NOTHING`;
-      console.log(`[migrate] applied ${f}`);
+    for (const name of Object.keys(PG_MIGRATIONS).sort()) {
+      if (applied.has(name)) continue;
+      await pg.unsafe(PG_MIGRATIONS[name]);
+      await pg`INSERT INTO drizzle_migrations (name) VALUES (${name}) ON CONFLICT (name) DO NOTHING`;
+      console.log(`[migrate] applied ${name}`);
     }
     _done = true;
     return;
   }
   getDb(); // ensure client exists (creates DB file)
+  // Bun-only migrator, loaded lazily like the sqlite driver (see db/client.ts).
+  const { migrate: migrateSqlite } = import.meta.require(
+    "drizzle-orm" + "/bun-sqlite/migrator"
+  ) as typeof import("drizzle-orm/bun-sqlite/migrator");
   migrateSqlite(getDb(), { migrationsFolder: SQLITE_FOLDER });
   _done = true;
 }
