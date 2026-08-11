@@ -257,7 +257,7 @@ export async function handleLeadMessage(businessId: string, conversationId: stri
         conversationId,
         payload: { intent: outcome.intent, message: trimmed.slice(0, 500) },
       });
-      reply = await offerRealAvailability(businessId, lead, reply);
+      reply = await offerRealAvailability(businessId, lead, reply, conversationId);
     }
     await callAiTool("send_message", { businessId, agent: outcome.agent.id, conversationId }, { conversation_id: conversationId, body: reply });
 
@@ -312,8 +312,14 @@ const OPT_OUT_RE = /^(stop|unsubscribe|opt\s*out|no\s+more\s+(texts|messages|fol
  * When the AI detects booking intent, append the next real open slots from the
  * calendar provider (business hours minus bookings minus busy blocks). If no
  * service is known yet, fall back to the business's first active service.
+ *
+ * Calendar failure (spec §12–14 + §31): when the calendar cannot be reached the
+ * AI NEVER claims a booking and NEVER invents times — the customer is told the
+ * scheduling system is unavailable, the request is handed to the team as a
+ * human task (priority medium), and the failed check_calendar is already
+ * audit-logged by the tool registry (never silent).
  */
-async function offerRealAvailability(businessId: string, lead: LeadRow, reply: string): Promise<string> {
+async function offerRealAvailability(businessId: string, lead: LeadRow, reply: string, conversationId?: string): Promise<string> {
   try {
     const services = await repo.listServices(businessId);
     if (!services.length) return reply;
@@ -323,7 +329,7 @@ async function offerRealAvailability(businessId: string, lead: LeadRow, reply: s
       services[0];
     // Real calendar availability — via the tool registry (check_calendar: READ,
     // validated + audited; slots come ONLY from the calendar provider).
-    const days = (await callAiTool("check_calendar", { businessId, agent: "appointment" }, {
+    const days = (await callAiTool("check_calendar", { businessId, agent: "appointment", conversationId }, {
       service_id: service.id,
       duration_min: service.durationMin,
       days: 3,
@@ -338,8 +344,28 @@ async function offerRealAvailability(businessId: string, lead: LeadRow, reply: s
       lines.push(`${d.date}: ${times}`);
     }
     return `${reply}\n\nHere are the next open times I can offer (${service.name}):\n${lines.join("\n")}\n\nWhich one works for you?`;
-  } catch {
-    return reply; // never break the conversation over availability
+  } catch (e) {
+    // Spec §12–14: never claim booked, never invent times — say it plainly and
+    // hand the follow-up to the team (employee contacts the customer, §31).
+    console.error(`[engine] calendar availability failed for ${businessId}:`, e);
+    try {
+      await callAiTool(
+        "create_human_task",
+        { businessId, agent: "appointment", conversationId, leadId: lead.id },
+        {
+          lead_id: lead.id,
+          priority: "medium",
+          reason: "calendar-failure",
+          conversation_summary: `Customer requested an appointment but the scheduling system could not be reached (${(e as Error)?.message ?? "provider error"}). Lead ${lead.firstName} ${lead.lastName ?? ""}${lead.serviceRequested ? ` — ${lead.serviceRequested}` : ""}.`,
+          recommended_action: "Contact the customer and confirm an appointment time manually.",
+        }
+      );
+    } catch (taskErr) {
+      // The human task is best-effort on top of the audited tool failure —
+      // never break the conversation over it.
+      console.error("[engine] calendar-failure human task failed:", taskErr);
+    }
+    return `${reply}\n\nI'm having trouble accessing the scheduling system right now. I've sent this to the team so they can confirm your appointment.`;
   }
 }
 
