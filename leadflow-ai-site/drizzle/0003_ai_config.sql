@@ -1,0 +1,1 @@
+ALTER TABLE `businesses` ADD `ai_config_json` text DEFAULT '{}';
