@@ -712,9 +712,12 @@ export async function callTool(opts: CallToolOptions): Promise<unknown> {
       const result = await tool.handler(ctx, parsed.data);
       if (tool.audit) {
         // create_lead returns the new row — carry its id onto the audit row
-        // (only when no lead id was already resolved).
+        // (only when no lead id was already resolved). The id heuristic is
+        // scoped to create_lead: other tools return rows whose `id` is NOT a
+        // lead id (get_business_info → business id, get_service → service id),
+        // and writing those into agent_actions.lead_id would violate the FK.
         const resultLeadId =
-          typeof result === "object" && result !== null && UUID_RE.test(String((result as Record<string, unknown>).id ?? ""));
+          tool.name === "create_lead" && typeof result === "object" && result !== null && UUID_RE.test(String((result as Record<string, unknown>).id ?? ""));
         await writeAudit(ctx, {
           action: tool.name,
           leadId: leadId ?? (resultLeadId ? String((result as Record<string, unknown>).id) : undefined),
