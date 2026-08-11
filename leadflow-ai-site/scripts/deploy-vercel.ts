@@ -38,7 +38,7 @@ function collectFiles(dir: string, prefix: string): { file: string; data: string
     const abs = path.join(dir, name);
     const rel = prefix ? `${prefix}/${name}` : name;
     if (statSync(abs).isDirectory()) out.push(...collectFiles(abs, rel));
-    else if (statSync(abs).size > 0) out.push({ file: rel, data: readFileSync(abs).toString("base64") });
+    else if (statSync(abs).size > 0) out.push({ file: rel, data: readFileSync(abs, "utf8") });
     else out.push({ file: rel, data: "" });
   }
   return out;
@@ -59,7 +59,7 @@ async function main() {
   const bundle = `/tmp/lf-vercel-deploy-${Date.now()}`;
   rmSync(bundle, { recursive: true, force: true });
   mkdirSync(bundle, { recursive: true });
-  for (const item of ["package.json", "bun.lock", "tsconfig.json", "vercel.json", "api", "src", "public"]) {
+  for (const item of ["package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "vercel.json", "api", "src", "public"]) {
     cpSync(path.join(ROOT, item), path.join(bundle, item), { recursive: true });
   }
   // Built SPA + widget.js become the static site (public/ is served by Vercel).
@@ -100,10 +100,10 @@ async function main() {
     if (key === "DATABASE_URL" && !value) {
       throw new Error("DATABASE_URL is required (set it in the environment; the Neon pooled URL)");
     }
-    const res = await api("POST", `/v10/projects/${PROJECT}/env${teamQ()}`, {
+    const res = await api("POST", `/v10/projects/${PROJECT}/env${teamQ()}${TEAM_ID ? "&upsert=true" : "?upsert=true"}`, {
       key, value, type: "encrypted", target: ["production", "preview", "development"],
     });
-    if (res.status !== 200) throw new Error(`could not set ${key} (HTTP ${res.status}: ${res.json?.error?.message})`);
+    if (res.status !== 200 && res.status !== 201) throw new Error(`could not set ${key} (HTTP ${res.status}: ${res.json?.error?.message})`);
     console.log(`   ${key} ${value ? "set" : "unchanged"}`);
   }
 

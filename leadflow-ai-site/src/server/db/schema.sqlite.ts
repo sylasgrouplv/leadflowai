@@ -593,3 +593,27 @@ export const businessReports = sqliteTable("business_reports", {
   narrativeJson: text("narrative_json").notNull().default("{}"),
   createdAt: integer("created_at").notNull(),
 }, (t) => [uniqueIndex("business_reports_biz_week_idx").on(t.businessId, t.weekStart)]);
+
+// ---------------------------------------------------------------------------
+// AI BRAIN 5b — platform-level settings (spec §39 admin AI control)
+// ---------------------------------------------------------------------------
+
+/**
+ * Global platform settings (spec §39): one row per settings key, value stored
+ * as JSON. Written ONLY by platform admins (admin@leadflow.ai) through the
+ * admin-only /api/admin/ai routes — business owners can never touch these
+ * (global safety rules stay platform-controlled).
+ *
+ * Keys:
+ *   "agents"   -> { receptionist, qualification, appointment, followup,
+ *                  review, bi, escalation: boolean } — global agent on/off.
+ *   "defaults" -> { tone, responseLength, escalationSensitivity } — global
+ *                  defaults applied when a business has not customized the
+ *                  field (spec §39 "global defaults").
+ */
+export const platformSettings = sqliteTable("platform_settings", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull(),
+  valueJson: text("value_json").notNull().default("{}"),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => [uniqueIndex("platform_settings_key_idx").on(t.key)]);

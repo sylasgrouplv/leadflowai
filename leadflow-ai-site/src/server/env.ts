@@ -37,6 +37,23 @@ export const env = {
   get stripeProvider() {
     return process.env.STRIPE_PROVIDER || "mock";
   },
+  /** Provider API keys (health checks §40: a real provider without its key is
+   *  ACTION REQUIRED; the mock provider is always HEALTHY). */
+  get aiApiKey() {
+    return process.env.AI_API_KEY || "";
+  },
+  get smsApiKey() {
+    return process.env.SMS_API_KEY || process.env.TWILIO_API_KEY || "";
+  },
+  get emailApiKey() {
+    return process.env.EMAIL_API_KEY || process.env.SENDGRID_API_KEY || "";
+  },
+  get calendarApiKey() {
+    return process.env.CALENDAR_API_KEY || process.env.GOOGLE_CALENDAR_API_KEY || "";
+  },
+  get stripeApiKey() {
+    return process.env.STRIPE_API_KEY || "";
+  },
   /** True when the request arrived over TLS (the public proxy terminates TLS). */
   isHttpsRequest(forwardedProto?: string) {
     return forwardedProto === "https";

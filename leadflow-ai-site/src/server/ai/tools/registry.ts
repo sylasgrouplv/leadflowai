@@ -31,6 +31,7 @@ import { startSequence, stopSequence, optOutLead, sendFollowUpRow } from "../../
 import { requestReview, recordFeedback } from "../../reviews/agent";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
+import { isAgentEnabled } from "../../platform/settings";
 import {
   computeLeadScore,
   displayScoreFor,
@@ -349,6 +350,12 @@ export const TOOL_REGISTRY: ToolDef[] = [
     }),
     validate: async (ctx, input) => validateLeadInBusiness(ctx, input.lead_id),
     handler: async (ctx, input) => {
+      // Spec §39 — the platform admin can disable the qualification agent
+      // globally. The failure is audited (visible on the admin AI control
+      // page); the chat engine swallows it and keeps the conversation going.
+      if (!(await isAgentEnabled("qualification"))) {
+        throw new Error("The qualification agent is currently disabled by the platform (admin AI control).");
+      }
       const lead = await repo.getLeadById(ctx.businessId, input.lead_id);
       if (!lead) throw new Error("Lead not found");
       const business = await repo.getBusinessById(ctx.businessId);
@@ -445,8 +452,15 @@ export const TOOL_REGISTRY: ToolDef[] = [
       }
       return null;
     },
-    handler: async (ctx, input) =>
-      bookAppointmentAction(ctx.businessId, { leadId: input.lead_id, serviceId: input.service_id ?? null, startAt: input.start_at, notes: input.notes }),
+    handler: async (ctx, input) => {
+      // Spec §39 — the appointment agent switch. When disabled, the AI cannot
+      // book; the failure is audited AND (book_appointment is a critical tool)
+      // a human task is created so the booking still happens manually.
+      if (!(await isAgentEnabled("appointment"))) {
+        throw new Error("The appointment agent is currently disabled by the platform (admin AI control).");
+      }
+      return bookAppointmentAction(ctx.businessId, { leadId: input.lead_id, serviceId: input.service_id ?? null, startAt: input.start_at, notes: input.notes });
+    },
     audit: true,
   },
   {

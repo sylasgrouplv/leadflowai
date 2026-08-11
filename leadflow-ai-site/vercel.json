@@ -1,14 +1,13 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "functions": {
     "api/[[...route]].ts": {
-      "maxDuration": 60,
-      "runtime": "nodejs22.x"
+      "maxDuration": 60
     }
   },
   "crons": [
-    { "path": "/api/internal/tick", "schedule": "*/5 * * * *" }
+    { "path": "/api/internal/tick", "schedule": "0 9 * * *" }
   ]
 }

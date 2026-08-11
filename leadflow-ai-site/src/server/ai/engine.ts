@@ -17,6 +17,7 @@ import { callAiTool } from "./tools/registry";
 import { emitEvent } from "./events";
 import { fmtTime } from "../appointments/agent";
 import { optOutLead, startSequence } from "../followups/engine";
+import { isAgentEnabled } from "../platform/settings";
 
 export type ConversationBundle = {
   conversation: NonNullable<Awaited<ReturnType<typeof repo.getConversationById>>>;
@@ -85,8 +86,11 @@ export async function startConversation(
   let conversation;
   // autoRespond (owner AI config): when off, new conversations start
   // human-held — the AI neither welcomes nor auto-replies until returned.
+  // Spec §39: the global receptionist switch (platform admin) gates the same
+  // way — when disabled, no business's AI receptionist welcomes or replies.
   const aiConfig = await repo.getAiConfig(businessId);
-  const autoRespond = aiConfig.autoRespond;
+  const receptionistEnabled = await isAgentEnabled("receptionist");
+  const autoRespond = aiConfig.autoRespond && receptionistEnabled;
   if (active) {
     conversation = active.conversation;
   } else {
@@ -124,6 +128,15 @@ export async function startConversation(
       conversation_id: conversation.id,
       sender: "system",
       body: "AI responses are paused — this business has reached its monthly AI usage budget. New conversations start human-held until the budget is raised (AI Agents page) or the month resets.",
+    });
+  } else if (!receptionistEnabled) {
+    // Spec §39 — the platform admin disabled the receptionist agent globally.
+    // New conversations start human-held, with a visible note (never silent).
+    await repo.updateConversation(businessId, conversation.id, { aiEnabled: 0, status: "active" });
+    await callAiTool("send_message", { businessId, agent: "system", conversationId: conversation.id }, {
+      conversation_id: conversation.id,
+      sender: "system",
+      body: "The AI receptionist is currently disabled by the platform. A team member will take it from here.",
     });
   }
 
@@ -250,16 +263,36 @@ export async function handleLeadMessage(businessId: string, conversationId: stri
 
     // Escalation: flag for humans, stop auto-responding, notify the team.
     if (outcome.escalate && lead) {
-      const priority = outcome.escalationReason === "emergency" ? "urgent" : ["complaint", "refund-request", "high-risk-action-cancel", "angry-or-legal"].includes(outcome.escalationReason ?? "") ? "high" : "medium";
-      await callAiTool("set_lead_status", { businessId, agent: "escalation", conversationId }, { lead_id: lead.id, status: "needs_human" });
-      await callAiTool("create_human_task", { businessId, agent: "escalation", conversationId }, {
-        lead_id: lead.id,
-        priority,
-        reason: outcome.escalationReason ?? "escalated-by-ai",
-        conversation_summary: `Lead ${lead.firstName} ${lead.lastName ?? ""} (${lead.serviceRequested || "no service"}). Last message: "${trimmed.slice(0, 300)}". AI reply: "${reply.slice(0, 200)}".`,
-        recommended_action: "Review the conversation and respond personally; do not let the AI continue unattended.",
-      });
-      await repo.updateConversation(businessId, conversationId, { aiEnabled: 0, status: "human_takeover" });
+      // Spec §39 — the escalation agent switch. Safety-critical triggers
+      // (emergency, direct human request, cancel/refund/legal/angry) ALWAYS
+      // escalate regardless of the switch; softer triggers (complaint, owner
+      // keyword, low-confidence unknown) are suppressed when the admin
+      // disabled the escalation agent — never silently (audit row + log).
+      const reason = outcome.escalationReason ?? "";
+      const ALWAYS_ESCALATE = ["emergency", "human-request", "high-risk-action-cancel", "angry-or-legal", "refund-request"];
+      const escalationEnabled = await isAgentEnabled("escalation");
+      if (!escalationEnabled && !ALWAYS_ESCALATE.includes(reason)) {
+        await repo.logAgentAction(businessId, {
+          agent: "escalation",
+          action: "escalation_suppressed",
+          leadId: lead.id,
+          input: { reason },
+          result: { suppressed: true, reason: "escalation-agent-disabled" },
+          success: false,
+        });
+        console.warn(`[engine] escalation suppressed (agent disabled) for ${businessId}: ${reason}`);
+      } else {
+        const priority = reason === "emergency" ? "urgent" : ["complaint", "refund-request", "high-risk-action-cancel", "angry-or-legal"].includes(reason) ? "high" : "medium";
+        await callAiTool("set_lead_status", { businessId, agent: "escalation", conversationId }, { lead_id: lead.id, status: "needs_human" });
+        await callAiTool("create_human_task", { businessId, agent: "escalation", conversationId }, {
+          lead_id: lead.id,
+          priority,
+          reason,
+          conversation_summary: `Lead ${lead.firstName} ${lead.lastName ?? ""} (${lead.serviceRequested || "no service"}). Last message: "${trimmed.slice(0, 300)}". AI reply: "${reply.slice(0, 200)}".`,
+          recommended_action: "Review the conversation and respond personally; do not let the AI continue unattended.",
+        });
+        await repo.updateConversation(businessId, conversationId, { aiEnabled: 0, status: "human_takeover" });
+      }
     } else if (lead) {
       // Keep status flowing: an engaged, fully-collected lead is qualified.
       await repo.updateLead(businessId, lead.id, { lastContactedAt: repo.now() });

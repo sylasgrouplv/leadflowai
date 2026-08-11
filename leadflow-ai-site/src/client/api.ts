@@ -483,3 +483,128 @@ export const statusLabel: Record<LeadStatus, string> = {
   unqualified: "Unqualified",
   needs_human: "Needs Human",
 };
+
+// ---------------------------------------------------------------------------
+// AI BRAIN 5b — agent performance dashboard (§36–37), admin AI control (§39),
+// system health (§40)
+// ---------------------------------------------------------------------------
+
+export interface SavingsAssumptions {
+  humanHourlyCostCents: number;
+  minutesPerConversation: number;
+}
+
+export interface AgentPerformanceRow {
+  agent: string;
+  actions: number;
+  success: number;
+  failed: number;
+  successRate: number;
+  lastActionAt: number | null;
+}
+
+export interface AiDashboardResponse {
+  businessId: string;
+  businessName: string;
+  periodStart: number;
+  periodEnd: number;
+  periodDays: number;
+  metrics: {
+    leadsCreated: number;
+    qualifiedLeads: number;
+    qualificationRate: number;
+    aiConversations: number;
+    totalConversations: number;
+    aiMessages: number;
+    humanMessages: number;
+    appointmentsBooked: number;
+    appointmentRate: number;
+    customers: number;
+    conversionRate: number;
+    escalations: number;
+    humanEscalationRate: number;
+    aiResolvedConversations: number;
+    aiResolutionRate: number;
+    avgResponseTimeMs: number;
+    followUpLeads: number;
+    followUpConversions: number;
+    followUpConversionRate: number;
+    /** Revenue attribution (§23) — ALWAYS an estimate. */
+    estimatedRevenueCents: number;
+    revenueIsEstimate: true;
+    agents: AgentPerformanceRow[];
+  };
+  savings: {
+    humanHourlyCostCents: number;
+    minutesPerConversation: number;
+    aiResolvedConversations: number;
+    hoursSaved: number;
+    estimatedSavingsCents: number;
+    isEstimate: true;
+    note: string;
+  };
+  assumptions: SavingsAssumptions;
+  generatedAt: number;
+}
+
+export type HealthStatus = "CONNECTED" | "ACTION REQUIRED";
+export interface SystemHealthService {
+  id: string;
+  label: string;
+  status: HealthStatus;
+  kind: "ok" | "mock" | "action";
+  provider: string;
+  detail: string;
+}
+export interface SystemHealthResponse {
+  services: SystemHealthService[];
+  overall: HealthStatus;
+  checkedAt: number;
+  note: string;
+}
+
+export interface AdminAiResponse {
+  agents: Record<string, boolean>;
+  defaults: { tone: AiTone; responseLength: AiResponseLength; escalationSensitivity: EscalationSensitivity };
+  safetyRules: Record<string, boolean>;
+  stats: {
+    escalations: number;
+    aiConversations: number;
+    escalationRate: number;
+    failedAutomations: number;
+    allTimeUsage: UsageSummary;
+    monthUsage: UsageSummary;
+    monthStart: number;
+    monthEnd: number;
+  };
+  agentErrors: {
+    id: string;
+    businessId: string | null;
+    businessName: string;
+    agent: string;
+    action: string;
+    input: Record<string, unknown>;
+    result: Record<string, unknown>;
+    createdAt: number;
+  }[];
+  actionLogs: {
+    id: string;
+    businessId: string | null;
+    businessName: string;
+    agent: string;
+    action: string;
+    success: boolean;
+    leadId: string | null;
+    createdAt: number;
+  }[];
+  failedAutomations: {
+    id: string;
+    businessId: string | null;
+    businessName: string;
+    ruleKind: string;
+    status: string;
+    lastError: string;
+    attempts: number;
+    createdAt: number;
+  }[];
+}

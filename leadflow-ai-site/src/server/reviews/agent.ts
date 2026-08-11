@@ -23,6 +23,7 @@
  * createHumanTaskRecord (spec §18).
  */
 import * as repo from "../db/repo";
+import { isAgentEnabled } from "../platform/settings";
 import { getEmailProvider, getSmsProvider } from "../integrations";
 import { emitEvent } from "../ai/events";
 import { createHumanTaskRecord } from "../ai/tools/registry";
@@ -126,6 +127,17 @@ export interface ReviewRequestResult {
  *   - emits REVIEW_REQUESTED (spec §30).
  */
 export async function requestReview(businessId: string, appointmentId: string): Promise<ReviewRequestResult> {
+  // Spec §39 — the platform admin can disable the review agent globally.
+  if (!(await isAgentEnabled("review"))) {
+    await repo.logAgentAction(businessId, {
+      agent: "review",
+      action: "send_review_request",
+      input: { appointmentId },
+      result: { blocked: true, reason: "review-agent-disabled" },
+      success: false,
+    });
+    return { status: "skipped", reason: "agent-disabled" };
+  }
   const appointment = await repo.getAppointmentById(businessId, appointmentId);
   if (!appointment) return { status: "skipped", reason: "no-appointment" };
   if (appointment.status !== "completed") return { status: "skipped", reason: `appointment-${appointment.status}` };

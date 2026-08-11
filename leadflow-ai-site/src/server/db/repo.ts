@@ -1247,7 +1247,25 @@ function parseAiConfig(raw: string | null | undefined): AiConfig {
 export async function getAiConfig(businessId: string): Promise<AiConfig> {
   const business = await getBusinessById(businessId);
   if (!business) return { ...DEFAULT_AI_CONFIG };
-  return parseAiConfig(business.aiConfigJson);
+  const cfg = parseAiConfig(business.aiConfigJson);
+  // Spec §39 platform global defaults: applied only where the business has NOT
+  // customized the field (field absent from the stored config JSON). When the
+  // admin has not changed the defaults this is a no-op (same values as
+  // DEFAULT_AI_CONFIG), so existing behavior is untouched.
+  if (!business.aiConfigJson) return cfg;
+  try {
+    const defaults = await getPlatformSetting<{ tone?: string; responseLength?: string; escalationSensitivity?: string }>("defaults");
+    if (!defaults) return cfg;
+    const raw = JSON.parse(business.aiConfigJson) as Record<string, unknown>;
+    if (typeof raw.tone !== "string" && AI_TONES.includes(defaults.tone as AiTone)) cfg.tone = defaults.tone as AiTone;
+    if (typeof raw.responseLength !== "string" && AI_RESPONSE_LENGTHS.includes(defaults.responseLength as AiResponseLength)) {
+      cfg.responseLength = defaults.responseLength as AiResponseLength;
+    }
+    if (typeof raw.escalationSensitivity !== "string") cfg.escalationSensitivity = normalizeSensitivity(defaults.escalationSensitivity);
+  } catch {
+    /* fall back to business config alone */
+  }
+  return cfg;
 }
 /** Persist a partial AI config update; returns the merged config. */
 export async function saveAiConfig(businessId: string, patch: Partial<AiConfig>): Promise<AiConfig> {
@@ -1863,6 +1881,107 @@ export async function listReviewsBetween(businessId: string, start: number, end:
     .from(s.reviews)
     .where(and(eq(s.reviews.businessId, businessId), gte(s.reviews.reviewRequestSentAt ?? 0, start), sql`${s.reviews.reviewRequestSentAt ?? 0} < ${end}`))
     .execute();
+}
+
+// ---------------------------------------------------------------------------
+// AI BRAIN 5b — platform settings (spec §39), savings assumptions (§37),
+// and metric helpers (§36) — see also src/server/ai/perf.ts + platform/settings.ts
+// ---------------------------------------------------------------------------
+
+/** Read a platform settings row's parsed JSON value (null when never set). */
+export async function getPlatformSetting<T = Record<string, unknown>>(key: string): Promise<T | null> {
+  const rows = await getDb().select().from(s.platformSettings).where(eq(s.platformSettings.key, key)).limit(1).execute();
+  if (!rows[0]) return null;
+  try {
+    return JSON.parse(rows[0].valueJson) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Upsert a platform settings row (admin-only callers — enforced in routes). */
+export async function setPlatformSetting(key: string, value: unknown): Promise<void> {
+  const existing = await getDb().select().from(s.platformSettings).where(eq(s.platformSettings.key, key)).limit(1).execute();
+  const t = now();
+  if (existing[0]) {
+    await getDb().update(s.platformSettings).set({ valueJson: JSON.stringify(value), updatedAt: t }).where(eq(s.platformSettings.id, existing[0].id)).execute();
+  } else {
+    await getDb().insert(s.platformSettings).values({ id: newId(), key, valueJson: JSON.stringify(value), updatedAt: t }).execute();
+  }
+}
+
+// --- Owner dashboard savings assumptions (§37) — stored in policiesJson.aiSavings
+// (merged, never overwritten — the policies/welcome writers both spread).
+
+export interface SavingsAssumptions {
+  /** Cost per hour of a human receptionist (cents) — configured assumption. */
+  humanHourlyCostCents: number;
+  /** Minutes a human would spend handling one AI-resolved conversation. */
+  minutesPerConversation: number;
+}
+
+export const DEFAULT_SAVINGS_ASSUMPTIONS: SavingsAssumptions = {
+  humanHourlyCostCents: 3000, // $30/hr
+  minutesPerConversation: 8,
+};
+
+/** Owner-configured savings assumptions (spec §37 — always labeled estimates). */
+export async function getSavingsAssumptions(businessId: string): Promise<SavingsAssumptions> {
+  const business = await getBusinessById(businessId);
+  if (!business) return { ...DEFAULT_SAVINGS_ASSUMPTIONS };
+  try {
+    const policies = JSON.parse(business.policiesJson || "{}") as { aiSavings?: Partial<SavingsAssumptions> };
+    const s = policies.aiSavings ?? {};
+    return {
+      humanHourlyCostCents:
+        typeof s.humanHourlyCostCents === "number" && Number.isFinite(s.humanHourlyCostCents) && s.humanHourlyCostCents >= 0
+          ? Math.floor(s.humanHourlyCostCents)
+          : DEFAULT_SAVINGS_ASSUMPTIONS.humanHourlyCostCents,
+      minutesPerConversation:
+        typeof s.minutesPerConversation === "number" && Number.isFinite(s.minutesPerConversation) && s.minutesPerConversation >= 0
+          ? Math.floor(s.minutesPerConversation)
+          : DEFAULT_SAVINGS_ASSUMPTIONS.minutesPerConversation,
+    };
+  } catch {
+    return { ...DEFAULT_SAVINGS_ASSUMPTIONS };
+  }
+}
+
+/** Persist savings assumptions (merged into policiesJson — never a full overwrite). */
+export async function saveSavingsAssumptions(businessId: string, patch: Partial<SavingsAssumptions>): Promise<SavingsAssumptions> {
+  const current = await getSavingsAssumptions(businessId);
+  const next: SavingsAssumptions = {
+    humanHourlyCostCents:
+      typeof patch.humanHourlyCostCents === "number" && Number.isFinite(patch.humanHourlyCostCents) && patch.humanHourlyCostCents >= 0
+        ? Math.floor(patch.humanHourlyCostCents)
+        : current.humanHourlyCostCents,
+    minutesPerConversation:
+      typeof patch.minutesPerConversation === "number" && Number.isFinite(patch.minutesPerConversation) && patch.minutesPerConversation >= 0
+        ? Math.floor(patch.minutesPerConversation)
+        : current.minutesPerConversation,
+  };
+  const business = await getBusinessById(businessId);
+  if (business) {
+    const policies = JSON.parse(business.policiesJson || "{}") as Record<string, unknown>;
+    await updateBusiness(businessId, { policiesJson: JSON.stringify({ ...policies, aiSavings: next }) });
+  }
+  return next;
+}
+
+/** Human escalation tasks created in [start, end) — used by the perf dashboard. */
+export async function listHumanTasksBetween(businessId: string, start: number, end: number) {
+  return await getDb()
+    .select()
+    .from(s.humanTasks)
+    .where(and(eq(s.humanTasks.businessId, businessId), gte(s.humanTasks.createdAt, start), sql`${s.humanTasks.createdAt} < ${end}`))
+    .execute();
+}
+
+/** Failed automation runs (any business) — admin health (§39) / system health (§40). */
+export async function listFailedAutomationRuns(limit = 50, sinceMs?: number) {
+  const conds: SQL[] = [eq(s.automationRuns.status, "failed")];
+  if (sinceMs !== undefined) conds.push(gte(s.automationRuns.createdAt, sinceMs));
+  return await getDb().select().from(s.automationRuns).where(and(...conds)).orderBy(desc(s.automationRuns.createdAt)).limit(limit).execute();
 }
 
 export type { SQL };

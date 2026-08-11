@@ -10,6 +10,9 @@ import { Dashboard } from "./pages/Dashboard";
 import { Onboarding } from "./pages/Onboarding";
 import { Placeholder } from "./pages/Placeholder";
 import { AiAgents } from "./pages/AiAgents";
+import { AiDashboard } from "./pages/AiDashboard";
+import { AdminAi } from "./pages/AdminAi";
+import { SystemHealth } from "./pages/SystemHealth";
 import { Analytics } from "./pages/Analytics";
 import { Leads } from "./pages/Leads";
 import { LeadDetail } from "./pages/LeadDetail";
@@ -90,8 +93,14 @@ function RequireAuth({ children }: { children: ReactNode }) {
 function OnboardingGate() {
   // Inside /app: users without a business (or with onboarding incomplete) are
   // sent to the wizard; everyone else sees the app shell.
-  const { business } = useAuth();
+  const { business, user } = useAuth();
   const location = useLocation();
+  // Platform admins have no business — they use the app shell for admin AI
+  // control + system health (§39–40), not the owner onboarding wizard.
+  if (user?.role === "admin") {
+    if (location.pathname === "/app/onboarding") return <Navigate to="/app/agents" replace />;
+    return <AppShell />;
+  }
   const needsOnboarding = !business || !business.onboardingCompleted;
   if (needsOnboarding && location.pathname !== "/app/onboarding") {
     return <Navigate to="/app/onboarding" replace />;
@@ -143,6 +152,9 @@ export function App() {
           <Route path="appointments" element={<Appointments />} />
           <Route path="follow-ups" element={<FollowUps />} />
           <Route path="agents" element={<AiAgents />} />
+          <Route path="ai-dashboard" element={<AiDashboard />} />
+          <Route path="system-health" element={<SystemHealth />} />
+          <Route path="admin-ai" element={<AdminAi />} />
           <Route path="knowledge" element={<KnowledgeBase />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="integrations" element={<Integrations />} />

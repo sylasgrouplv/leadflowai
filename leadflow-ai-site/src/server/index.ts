@@ -16,6 +16,8 @@ import { followUpRoutes } from "./routes/followups";
 import { notificationRoutes } from "./routes/notifications";
 import { widgetRoutes } from "./routes/widget";
 import { aiRoutes } from "./routes/ai";
+import { adminRoutes } from "./routes/admin";
+import { healthRoutes } from "./routes/health";
 import { analyticsRoutes } from "./routes/analytics";
 import { reviewRoutes } from "./routes/reviews";
 import { reportRoutes } from "./routes/reports";
@@ -82,6 +84,8 @@ export async function createApp() {
   app.route("/api/notifications", notificationRoutes);
   app.route("/api/widget", widgetRoutes);
   app.route("/api/ai", aiRoutes);
+  app.route("/api/admin", adminRoutes);
+  app.route("/api/health", healthRoutes);
   app.route("/api/analytics", analyticsRoutes);
   app.route("/api/reviews", reviewRoutes);
   app.route("/api/reports", reportRoutes);

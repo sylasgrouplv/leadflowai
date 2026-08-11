@@ -1,11 +1,16 @@
 /**
- * AI agent configuration routes (spec §38 agent config + §32 usage/cost).
+ * AI agent configuration routes (spec §38 agent config + §32 usage/cost +
+ * §36–37 owner AI dashboard).
  *
  *   GET  /api/ai/config    owner: current receptionist config + welcome message
  *   PUT  /api/ai/config    owner: update agentName / tone / responseLength /
  *                                  escalationSensitivity / escalationKeywords /
  *                                  autoRespond / monthlyBudgetCents / welcomeMessage
  *   GET  /api/ai/usage     owner: current-month usage vs budget + alerts
+ *   GET  /api/ai/dashboard owner: agent performance metrics + AI savings
+ *                                  estimate (spec §36–37), ?days=30 default
+ *   PUT  /api/ai/dashboard/savings
+ *                          owner: configure savings assumptions (§37)
  *
  * The config is real and engine-backed:
  *   - agentName             -> chat UI sender name, widget header, signatures
@@ -25,6 +30,7 @@ import { z } from "zod";
 import * as repo from "../db/repo";
 import { attachUser, HttpError, requireOwnerBusiness } from "../auth/guards";
 import { checkBudgetAlerts, getBudgetStatus } from "../usage/budget";
+import { computeAgentMetrics } from "../ai/perf";
 
 const updateSchema = z.object({
   autoRespond: z.boolean().optional(),
@@ -90,6 +96,70 @@ aiRoutes.get("/usage", async (c) => {
   await checkBudgetAlerts(business.id);
   const status = await getBudgetStatus(business.id);
   return c.json(status);
+});
+
+/** Owner AI dashboard (spec §36–37): live metrics computed from real rows. */
+aiRoutes.get("/dashboard", async (c) => {
+  const { business } = await requireOwnerBusiness(c);
+  const daysParam = Number(c.req.query("days") ?? "30");
+  const days = Number.isFinite(daysParam) && daysParam >= 1 && daysParam <= 365 ? Math.floor(daysParam) : 30;
+  const metrics = await computeAgentMetrics(business.id, days);
+  const assumptions = await repo.getSavingsAssumptions(business.id);
+  return c.json({
+    businessId: business.id,
+    businessName: metrics.businessName,
+    periodStart: metrics.periodStart,
+    periodEnd: metrics.periodEnd,
+    periodDays: metrics.periodDays,
+    metrics: {
+      leadsCreated: metrics.leadsCreated,
+      qualifiedLeads: metrics.qualifiedLeads,
+      qualificationRate: metrics.qualificationRate,
+      aiConversations: metrics.aiConversations,
+      totalConversations: metrics.totalConversations,
+      aiMessages: metrics.aiMessages,
+      humanMessages: metrics.humanMessages,
+      appointmentsBooked: metrics.appointmentsBooked,
+      appointmentRate: metrics.appointmentRate,
+      customers: metrics.customers,
+      conversionRate: metrics.conversionRate,
+      escalations: metrics.escalations,
+      humanEscalationRate: metrics.humanEscalationRate,
+      aiResolvedConversations: metrics.aiResolvedConversations,
+      aiResolutionRate: metrics.aiResolutionRate,
+      avgResponseTimeMs: metrics.avgResponseTimeMs,
+      followUpLeads: metrics.followUpLeads,
+      followUpConversions: metrics.followUpConversions,
+      followUpConversionRate: metrics.followUpConversionRate,
+      // Revenue attribution (§23) — ALWAYS an estimate, never actuals.
+      estimatedRevenueCents: metrics.estimatedRevenueCents,
+      revenueIsEstimate: true,
+      agents: metrics.agents,
+    },
+    savings: {
+      ...metrics.savings,
+      // §37 — clearly-labeled estimate: computed from configured assumptions.
+      note: "Estimated savings based on your configured assumptions — not an actual accounting figure.",
+    },
+    assumptions,
+    generatedAt: Date.now(),
+  });
+});
+
+/** Owner-configured savings assumptions (§37) — stored per business. */
+aiRoutes.put("/dashboard/savings", async (c) => {
+  const { business, user } = await requireOwnerBusiness(c);
+  const body = await c.req.json().catch(() => null);
+  const parsed = savingsSchema.safeParse(body);
+  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message ?? "Invalid input");
+  const assumptions = await repo.saveSavingsAssumptions(business.id, parsed.data);
+  await repo.audit(business.id, user.id, "ai.dashboard_savings_updated", "business", business.id, { patch: parsed.data });
+  return c.json({ assumptions });
+});
+
+const savingsSchema = z.object({
+  humanHourlyCostCents: z.number().int().min(0).max(100_000_000).optional(),
+  minutesPerConversation: z.number().int().min(1).max(600).optional(),
 });
 
 function safeJson<T>(raw: string | null, fallback: T): T {
