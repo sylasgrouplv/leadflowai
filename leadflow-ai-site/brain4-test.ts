@@ -254,8 +254,8 @@ console.log("\n== (c) weekly report: correct aggregates from real data ==");
   // Backdate the appointment rows into the fixture week (metrics count by
   // appointment.created_at — see listAppointmentsCreatedBetween).
   const db = getDb();
-  db.update(schema.appointments).set({ createdAt: weekStart + 4 * 3600_000 }).where(eq(schema.appointments.id, a1.appointment.id)).run();
-  db.update(schema.appointments).set({ createdAt: weekStart + 5 * 3600_000 }).where(eq(schema.appointments.id, a2.appointment.id)).run();
+  await db.update(schema.appointments).set({ createdAt: weekStart + 4 * 3600_000 }).where(eq(schema.appointments.id, a1.appointment.id)).execute();
+  await db.update(schema.appointments).set({ createdAt: weekStart + 5 * 3600_000 }).where(eq(schema.appointments.id, a2.appointment.id)).execute();
 
   const report = await generateWeeklyReport(bizId, weekStart);
   const m = report.metrics;
@@ -303,7 +303,7 @@ try {
     .select()
     .from(schema.leads)
     .where(eq(schema.leads.businessId, bizId))
-    .all()
+    .execute()
     .filter(
       (l) =>
         createdLeadIds.includes(l.id) ||
@@ -311,38 +311,38 @@ try {
         ["Positive", "Negative", "BI1", "BI2", "BI3"].includes(l.firstName)
     );
   for (const l of leads) {
-    for (const c of db.select().from(schema.conversations).where(eq(schema.conversations.leadId, l.id)).all()) {
-      db.delete(schema.messages).where(eq(schema.messages.conversationId, c.id)).run();
-      db.delete(schema.conversations).where(eq(schema.conversations.id, c.id)).run();
+    for (const c of await db.select().from(schema.conversations).where(eq(schema.conversations.leadId, l.id)).execute()) {
+      await db.delete(schema.messages).where(eq(schema.messages.conversationId, c.id)).execute();
+      await db.delete(schema.conversations).where(eq(schema.conversations.id, c.id)).execute();
     }
-    db.delete(schema.events).where(eq(schema.events.leadId, l.id)).run();
-    db.delete(schema.automationRuns).where(eq(schema.automationRuns.leadId, l.id)).run();
-    db.delete(schema.followUps).where(eq(schema.followUps.leadId, l.id)).run();
-    db.delete(schema.reviews).where(eq(schema.reviews.leadId, l.id)).run();
-    db.delete(schema.appointments).where(eq(schema.appointments.leadId, l.id)).run();
-    db.delete(schema.humanTasks).where(eq(schema.humanTasks.leadId, l.id)).run();
-    db.delete(schema.agentActions).where(eq(schema.agentActions.leadId, l.id)).run();
-    db.delete(schema.leads).where(eq(schema.leads.id, l.id)).run();
+    await db.delete(schema.events).where(eq(schema.events.leadId, l.id)).execute();
+    await db.delete(schema.automationRuns).where(eq(schema.automationRuns.leadId, l.id)).execute();
+    await db.delete(schema.followUps).where(eq(schema.followUps.leadId, l.id)).execute();
+    await db.delete(schema.reviews).where(eq(schema.reviews.leadId, l.id)).execute();
+    await db.delete(schema.appointments).where(eq(schema.appointments.leadId, l.id)).execute();
+    await db.delete(schema.humanTasks).where(eq(schema.humanTasks.leadId, l.id)).execute();
+    await db.delete(schema.agentActions).where(eq(schema.agentActions.leadId, l.id)).execute();
+    await db.delete(schema.leads).where(eq(schema.leads.id, l.id)).execute();
   }
   for (const sid of createdServiceIds) {
-    db.delete(schema.services).where(eq(schema.services.id, sid)).run();
+    await db.delete(schema.services).where(eq(schema.services.id, sid)).execute();
   }
   // Also sweep test services left behind by crashed runs of this suite (the
   // id list above only covers the current run; names are test-unique).
-  for (const svc of db.select().from(schema.services).where(eq(schema.services.businessId, bizId)).all()) {
-    if (/^(Brain4|BI) Svc [AB]$/.test(svc.name)) db.delete(schema.services).where(eq(schema.services.id, svc.id)).run();
+  for (const svc of await db.select().from(schema.services).where(eq(schema.services.businessId, bizId)).execute()) {
+    if (/^(Brain4|BI) Svc [AB]$/.test(svc.name)) db.delete(schema.services).where(eq(schema.services.id, svc.id)).execute();
   }
   for (const rid of createdRuleIds) {
-    db.delete(schema.automationRuns).where(eq(schema.automationRuns.ruleId, rid)).run();
-    db.delete(schema.automationRules).where(eq(schema.automationRules.id, rid)).run();
+    await db.delete(schema.automationRuns).where(eq(schema.automationRuns.ruleId, rid)).execute();
+    await db.delete(schema.automationRules).where(eq(schema.automationRules.id, rid)).execute();
   }
   if (createdReportId) {
-    db.delete(schema.businessReports).where(eq(schema.businessReports.id, createdReportId)).run();
+    await db.delete(schema.businessReports).where(eq(schema.businessReports.id, createdReportId)).execute();
   }
   // Restore the review config: drop the row entirely when it only ever existed
   // because of this suite (defaults), otherwise put back the pre-test values.
   if (preReviewConfig.id === "" || preReviewConfig.reviewUrl.includes("maps.example.com/reviews/brain4")) {
-    db.delete(schema.reviewConfigs).where(eq(schema.reviewConfigs.businessId, bizId)).run();
+    await db.delete(schema.reviewConfigs).where(eq(schema.reviewConfigs.businessId, bizId)).execute();
   } else {
     await repo.saveReviewConfig(bizId, {
       enabled: preReviewConfig.enabled === 1,
@@ -354,9 +354,9 @@ try {
     .select()
     .from(schema.notifications)
     .where(eq(schema.notifications.businessId, bizId))
-    .all()
+    .execute()
     .filter((n) => n.createdAt >= START_TS);
-  for (const n of notifs) db.delete(schema.notifications).where(eq(schema.notifications.id, n.id)).run();
+  for (const n of notifs) await db.delete(schema.notifications).where(eq(schema.notifications.id, n.id)).execute();
   console.log(`cleanup done (${leads.length} brain4 test leads removed)`);
 } catch (e) {
   console.error("cleanup error:", e);

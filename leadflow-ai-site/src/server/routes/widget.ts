@@ -147,7 +147,7 @@ widgetRoutes.post("/chat", rateLimit(30, 60_000), async (c) => {
     conversationId = bundle.conversation.id;
   }
 
-  const bundle = await handleLeadMessage(businessId, conversationId, message);
+  const bundle = await handleLeadMessage(businessId, conversationId!, message);
 
   const aiConfig = await repo.getAiConfig(businessId);
   return c.json({

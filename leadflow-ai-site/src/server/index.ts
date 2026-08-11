@@ -24,8 +24,8 @@ import { runMigrations } from "./db/migrate";
 import { env } from "./env";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
-export function createApp() {
-  runMigrations(); // idempotent; applies pending SQL migrations at boot
+export async function createApp() {
+  await runMigrations(); // idempotent; applies pending SQL migrations at boot
 
   const app = new Hono();
 

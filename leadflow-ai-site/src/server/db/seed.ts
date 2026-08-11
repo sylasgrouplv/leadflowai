@@ -24,7 +24,7 @@ const HOURS = {
 };
 
 export async function seed() {
-  runMigrations();
+  await runMigrations();
 
   const existingAdmin = await repo.getUserByEmail("admin@leadflow.ai");
   if (!existingAdmin) {

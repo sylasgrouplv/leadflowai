@@ -289,21 +289,21 @@ try {
   const db = (await import("./src/server/db/client")).getDb();
   const s = await import("./src/server/db/schema");
   const { eq } = await import("drizzle-orm");
-  const leads = db.select().from(s.leads).where(eq(s.leads.businessId, bizId)).all().filter((l) => l.source === SOURCE);
+  const leads = (await db.select().from(s.leads).where(eq(s.leads.businessId, bizId)).execute()).filter((l) => l.source === SOURCE);
   for (const l of leads) {
-    for (const c of db.select().from(s.conversations).where(eq(s.conversations.leadId, l.id)).all()) {
-      db.delete(s.messages).where(eq(s.messages.conversationId, c.id)).run();
-      db.delete(s.conversations).where(eq(s.conversations.id, c.id)).run();
+    for (const c of await db.select().from(s.conversations).where(eq(s.conversations.leadId, l.id)).execute()) {
+      await db.delete(s.messages).where(eq(s.messages.conversationId, c.id)).execute();
+      await db.delete(s.conversations).where(eq(s.conversations.id, c.id)).execute();
     }
-    db.delete(s.followUps).where(eq(s.followUps.leadId, l.id)).run();
-    db.delete(s.appointments).where(eq(s.appointments.leadId, l.id)).run();
-    db.delete(s.agentActions).where(eq(s.agentActions.leadId, l.id)).run();
-    db.delete(s.leads).where(eq(s.leads.id, l.id)).run();
+    await db.delete(s.followUps).where(eq(s.followUps.leadId, l.id)).execute();
+    await db.delete(s.appointments).where(eq(s.appointments.leadId, l.id)).execute();
+    await db.delete(s.agentActions).where(eq(s.agentActions.leadId, l.id)).execute();
+    await db.delete(s.leads).where(eq(s.leads.id, l.id)).execute();
   }
-  const notifs = db.select().from(s.notifications).where(eq(s.notifications.businessId, bizId)).all();
+  const notifs = await db.select().from(s.notifications).where(eq(s.notifications.businessId, bizId)).execute();
   for (const n of notifs) {
     if (n.createdAt >= START_TS && n.kind === "escalation" && /Needs human attention/.test(n.title)) {
-      db.delete(s.notifications).where(eq(s.notifications.id, n.id)).run();
+      await db.delete(s.notifications).where(eq(s.notifications.id, n.id)).execute();
     }
   }
   console.log(`cleanup done (${leads.length} test leads removed)`);
