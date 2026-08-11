@@ -177,7 +177,7 @@ export function ConversationDetail() {
             </div>
           ) : (
             messages.map((m) => (
-              <MessageBubble key={m.id} sender={m.sender} body={m.body} createdAt={m.createdAt} />
+              <MessageBubble key={m.id} sender={m.sender} body={m.body} createdAt={m.createdAt} aiName={bundle.ai.name} />
             ))
           )}
           {sending && aiActive ? (
@@ -344,7 +344,7 @@ export function ConversationDetail() {
   );
 }
 
-function MessageBubble({ sender, body, createdAt }: { sender: string; body: string; createdAt: number }) {
+function MessageBubble({ sender, body, createdAt, aiName }: { sender: string; body: string; createdAt: number; aiName?: string }) {
   const isLead = sender === "lead";
   const isAI = sender === "ai";
   const isEmployee = sender === "employee";
@@ -363,7 +363,7 @@ function MessageBubble({ sender, body, createdAt }: { sender: string; body: stri
       >
         <p className="whitespace-pre-wrap leading-relaxed">{body}</p>
         <p className={`mt-1 text-[10px] ${isLead ? "text-indigo-200" : "text-slate-400"}`}>
-          {isAI ? "AI receptionist" : isEmployee ? "Your team" : isLead ? "Lead" : "System"} · {fmtDateTime(createdAt)}
+          {isAI ? (aiName || "AI receptionist") : isEmployee ? "Your team" : isLead ? "Lead" : "System"} · {fmtDateTime(createdAt)}
         </p>
       </div>
     </div>

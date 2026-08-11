@@ -53,7 +53,7 @@ export interface AiGenerateInput {
   policies: { cancellationPolicy: string; financing: string; promotions: string; welcomeMessage: string };
   hours: Record<string, { open: string; close: string; closed: boolean }>;
   serviceArea: { zipCodes: string[]; cities: string[] };
-  escalation: { sensitivity: "low" | "medium" | "high"; keywords: string[] };
+  escalation: { sensitivity: "Conservative" | "Balanced" | "Aggressive" | "low" | "medium" | "high"; keywords: string[] };
   /** Conversation short-term memory (spec §27) — never re-ask what's here. */
   memory: ConversationMemory;
   /** Lead row facts available to the AI (no internal notes, no other customers). */
@@ -71,12 +71,29 @@ export interface AiGenerateInput {
   hasAppointment: boolean;
   conversation: { channel: string; status: string };
   history: AiMessage[];
+  /** Spec §38 — agent name, tone, response length (shape the reply). */
+  agentName?: string;
+  tone?: "Professional" | "Friendly" | "Casual" | "Concise";
+  responseLength?: "Short" | "Medium" | "Detailed";
+}
+
+export interface AiUsageEstimate {
+  inputTokens: number;
+  outputTokens: number;
+  /** Deterministic estimated cost in cents — always an estimate (spec §32). */
+  estimatedCostCents: number;
 }
 
 export interface AiGeneratedReply {
   reply: string;
   /** How ready the AI is to answer from provided context (spec §26). */
   answerConfidence: ConfidenceLevel;
+  /** True when the reply is the standardized "no grounded answer" phrasing —
+   *  the orchestrator uses this flag (not string equality) to decide
+   *  clarify vs escalate. */
+  noAnswer?: boolean;
+  /** Deterministic token/cost estimate reported by the provider (spec §32). */
+  usage?: AiUsageEstimate;
 }
 
 export interface AiRequest {
@@ -96,7 +113,7 @@ export interface AiRequest {
    * always escalate regardless of sensitivity.
    */
   escalation?: {
-    sensitivity: "low" | "medium" | "high";
+    sensitivity: "Conservative" | "Balanced" | "Aggressive" | "low" | "medium" | "high";
     keywords: string[];
   };
 }

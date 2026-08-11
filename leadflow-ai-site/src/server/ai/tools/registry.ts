@@ -30,6 +30,7 @@ import { checkCalendarAction, bookAppointmentAction, updateAppointmentStatusActi
 import { startSequence, stopSequence, optOutLead, sendFollowUpRow } from "../../followups/engine";
 import { requestReview, recordFeedback } from "../../reviews/agent";
 import { emitEvent } from "../events";
+import { checkBudgetAlerts } from "../../usage/budget";
 import {
   computeLeadScore,
   displayScoreFor,
@@ -532,6 +533,38 @@ export const TOOL_REGISTRY: ToolDef[] = [
         conversationSummary: input.conversation_summary,
         recommendedAction: input.recommended_action,
       }),
+    audit: true,
+  },
+
+  {
+    name: "record_usage",
+    description:
+      "Record a deterministic usage/cost event for this business (ai_message | sms | voice, spec §32). " +
+      "Called after every AI reply and SMS send; the handler also fires deduped 80/90/100% budget alerts. " +
+      "Tenant-scoped by the calling business; audited like every tool.",
+    permissionLevel: "WRITE",
+    inputSchema: z.object({
+      kind: z.enum(["ai_message", "sms", "voice"]),
+      direction: z.enum(["inbound", "outbound"]),
+      input_tokens: z.number().int().min(0),
+      output_tokens: z.number().int().min(0),
+      estimated_cost_cents: z.number().int().min(0),
+      meta: z.record(z.string(), z.unknown()).optional(),
+    }),
+    validate: async (ctx) => (await repo.getBusinessById(ctx.businessId)) ? null : `business ${ctx.businessId} not found`,
+    handler: async (ctx, input) => {
+      await repo.recordUsageEvent(ctx.businessId, {
+        kind: input.kind,
+        direction: input.direction,
+        inputTokens: input.input_tokens,
+        outputTokens: input.output_tokens,
+        estimatedCostCents: input.estimated_cost_cents,
+        meta: input.meta,
+      });
+      // Budget alerts fire here — the single choke point for every usage event.
+      await checkBudgetAlerts(ctx.businessId);
+      return { ok: true };
+    },
     audit: true,
   },
 

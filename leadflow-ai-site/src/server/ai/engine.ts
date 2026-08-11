@@ -9,6 +9,7 @@
  */
 import * as repo from "../db/repo";
 import { getAiProvider } from "../integrations";
+import { usageBudgetExhausted } from "../usage/budget";
 import { orchestrate } from "./orchestrator";
 import { qualifyLead, setStatusAction, scoreLeadAction, type LeadRow } from "./qualify";
 import type { LeadScore, LeadStatus } from "../db/schema";
@@ -41,6 +42,7 @@ export async function getBundle(businessId: string, conversationId: string): Pro
   ]);
   const fups = conversation.leadId ? await repo.getNextFollowUps(businessId) : new Map<string, { scheduledFor: number; type: string }>();
   const nextFollowUp = conversation.leadId ? fups.get(conversation.leadId) ?? null : null;
+  const aiConfig = await repo.getAiConfig(businessId);
   return {
     conversation,
     lead,
@@ -48,7 +50,8 @@ export async function getBundle(businessId: string, conversationId: string): Pro
     appointments,
     nextFollowUp,
     ai: {
-      name: getAiProvider().name,
+      // Spec §38 — the chat UI shows the owner-configured agent name.
+      name: aiConfig.agentName,
       active: conversation.aiEnabled === 1,
       status: conversation.status,
       heldByHuman: conversation.status === "human_takeover",
@@ -95,9 +98,14 @@ export async function startConversation(
     });
   }
 
+  // Spec §32 runaway-stop: when the monthly usage budget is exhausted the AI
+  // does not welcome new conversations — they start human-held so costs can't
+  // run away until the owner raises the budget (or the month rolls over).
+  const budgetExhausted = await usageBudgetExhausted(businessId);
+
   // AI welcome message (skipped when auto-respond is off — the AI stays quiet
   // until a human hands the conversation back).
-  if (opts.welcome !== false && autoRespond) {
+  if (opts.welcome !== false && autoRespond && !budgetExhausted) {
     const business = await repo.getBusinessById(businessId);
     let welcome = DEFAULT_WELCOME;
     if (business) {
@@ -109,6 +117,14 @@ export async function startConversation(
       }
     }
     await callAiTool("send_message", { businessId, agent: "receptionist", conversationId: conversation.id }, { conversation_id: conversation.id, body: welcome });
+  } else if (budgetExhausted && autoRespond) {
+    // Hold the conversation for a human and say so in the thread.
+    await repo.updateConversation(businessId, conversation.id, { aiEnabled: 0, status: "active" });
+    await callAiTool("send_message", { businessId, agent: "system", conversationId: conversation.id }, {
+      conversation_id: conversation.id,
+      sender: "system",
+      body: "AI responses are paused — this business has reached its monthly AI usage budget. New conversations start human-held until the budget is raised (AI Agents page) or the month resets.",
+    });
   }
 
   const bundle = await getBundle(businessId, conversation.id);
@@ -181,6 +197,26 @@ export async function handleLeadMessage(businessId: string, conversationId: stri
     }
   }
   if (conversation.aiEnabled === 1) {
+    // Spec §32 runaway-stop: once the monthly usage budget is exhausted the AI
+    // stops auto-responding — the conversation is held for a human and the
+    // owner was already notified at 100% (deduped). Raising the budget on the
+    // AI Agents page clears the gate immediately (it is computed, not stored).
+    if (await usageBudgetExhausted(businessId)) {
+      await repo.updateConversation(businessId, conversationId, { aiEnabled: 0, status: "active" });
+      try {
+        await callAiTool("send_message", { businessId, agent: "system", conversationId }, {
+          conversation_id: conversationId,
+          sender: "system",
+          body: "AI responses are paused — this business has reached its monthly AI usage budget. A team member will take it from here (raise the budget on the AI Agents page to resume).",
+        });
+      } catch (e) {
+        console.error("[engine] budget-pause note failed:", e);
+      }
+      if (lead) await repo.updateLead(businessId, lead.id, { lastContactedAt: repo.now() });
+      const bb = await getBundle(businessId, conversationId);
+      if (!bb) throw new Error("Conversation could not be loaded");
+      return bb;
+    }
     // Qualification first so the AI reply can be grounded in fresh lead data.
     if (lead) {
       const q = await qualifyLead(businessId, lead, trimmed);

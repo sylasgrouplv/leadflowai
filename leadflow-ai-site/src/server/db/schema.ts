@@ -541,6 +541,40 @@ export const reviews = sqliteTable("reviews", {
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (t) => [index("reviews_business_idx").on(t.businessId, t.createdAt), index("reviews_business_sentiment_idx").on(t.businessId, t.sentiment)]);
+// ---------------------------------------------------------------------------
+// AI BRAIN 5a — per-business usage & cost tracking (spec §32)
+// ---------------------------------------------------------------------------
+
+export const USAGE_KINDS = ["ai_message", "sms", "voice"] as const;
+export type UsageKind = (typeof USAGE_KINDS)[number];
+export const USAGE_DIRECTIONS = ["inbound", "outbound"] as const;
+export type UsageDirection = (typeof USAGE_DIRECTIONS)[number];
+
+/**
+ * Per-business usage events (spec §32): one row per AI reply / SMS send /
+ * (future) voice call. `input_tokens` + `output_tokens` are the deterministic
+ * token counts reported by the AI provider (mock today, real LLM later);
+ * `estimated_cost_cents` is the provider-reported or fixed per-message cost
+ * estimate — always an estimate, never a bill. The monthly rollup (repo
+ * getMonthlyUsage) drives the 80/90/100% budget alerts and the runaway-stop.
+ * Rows are created ONLY through the record_usage tool (audited, tenant-scoped).
+ */
+export const usageEvents = sqliteTable("usage_events", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id")
+    .notNull()
+    .references(() => businesses.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<UsageKind>().notNull(),
+  direction: text("direction").$type<UsageDirection>().notNull(),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  estimatedCostCents: integer("estimated_cost_cents").notNull().default(0),
+  /** JSON blob: provider name, intent, agent, template key, … */
+  metaJson: text("meta_json").notNull().default("{}"),
+  createdAt: integer("created_at").notNull(),
+}, (t) => [index("usage_events_business_created_idx").on(t.businessId, t.createdAt)]);
+
+
 
 /**
  * Business Intelligence weekly reports (spec §22): deterministic aggregation

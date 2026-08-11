@@ -26,6 +26,7 @@ import * as repo from "../db/repo";
 import { getEmailProvider, getSmsProvider } from "../integrations";
 import { emitEvent } from "../ai/events";
 import { createHumanTaskRecord } from "../ai/tools/registry";
+import { recordSmsUsage } from "../usage/record";
 import type { ReviewSentiment } from "../db/schema";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -87,6 +88,8 @@ async function sendViaChannel(
       result: { provider: getSmsProvider().name, id: res.id },
       success: true,
     });
+    // Spec §32 — every SMS send counts toward the monthly usage budget.
+    await recordSmsUsage({ businessId, leadId: lead.id, agent: "review", body: opts.smsBody, meta: { templateKey: opts.templateKey } });
     return { channel: "sms", provider: getSmsProvider().name, id: res.id };
   }
   if (lead.email) {

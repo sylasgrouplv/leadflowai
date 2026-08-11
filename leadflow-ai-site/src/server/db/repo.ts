@@ -8,7 +8,7 @@
  * All functions are async so a future Postgres driver swap (await-based) is a
  * change inside this file + client.ts, not across the app.
  */
-import { and, asc, count, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./client";
 import * as s from "./schema";
 import {
@@ -1148,67 +1148,186 @@ export async function saveWidgetSettings(businessId: string, patch: { enabled?: 
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// AI agent config (spec §6/§13 — owner-configured receptionist behavior)
+// AI agent config (spec §38 — owner-configured receptionist behavior)
 // ---------------------------------------------------------------------------
-
-export type EscalationSensitivity = "low" | "medium" | "high";
-
+export type EscalationSensitivity = "Conservative" | "Balanced" | "Aggressive";
+export type AiTone = "Professional" | "Friendly" | "Casual" | "Concise";
+export type AiResponseLength = "Short" | "Medium" | "Detailed";
+/** Legacy stored values (pre-Brain-5a) — accepted everywhere and normalized. */
+export type LegacyEscalationSensitivity = "low" | "medium" | "high";
 export interface AiConfig {
   /** AI replies to lead messages automatically (default true). */
   autoRespond: boolean;
-  /** How readily the receptionist escalates to a human. */
+  /** The receptionist's name — shown in chat UI, widget header, signatures. */
+  agentName: string;
+  /** Reply phrasing style (spec §38). */
+  tone: AiTone;
+  /** Reply verbosity (spec §38). */
+  responseLength: AiResponseLength;
+  /** How readily the receptionist escalates to a human (spec §38). */
   escalationSensitivity: EscalationSensitivity;
   /** Extra owner-defined phrases that must escalate (always honored). */
   escalationKeywords: string[];
+  /** Monthly usage budget in cents (spec §32); alerts at 80/90/100%. */
+  monthlyBudgetCents: number;
 }
-
 export const DEFAULT_AI_CONFIG: AiConfig = {
   autoRespond: true,
-  escalationSensitivity: "medium",
+  agentName: "Sarah",
+  tone: "Professional",
+  responseLength: "Medium",
+  escalationSensitivity: "Balanced",
   escalationKeywords: [],
+  monthlyBudgetCents: 10_000, // $100/mo sane default — owner-adjustable
 };
-
-export const ESCALATION_SENSITIVITIES: EscalationSensitivity[] = ["low", "medium", "high"];
-
+export const ESCALATION_SENSITIVITIES: EscalationSensitivity[] = ["Conservative", "Balanced", "Aggressive"];
+export const AI_TONES: AiTone[] = ["Professional", "Friendly", "Casual", "Concise"];
+export const AI_RESPONSE_LENGTHS: AiResponseLength[] = ["Short", "Medium", "Detailed"];
+/** Backward-compat: old stored low/medium/high map onto the spec values. */
+export function normalizeSensitivity(v: unknown): EscalationSensitivity {
+  if (v === "Conservative" || v === "low") return "Conservative";
+  if (v === "Balanced" || v === "medium") return "Balanced";
+  if (v === "Aggressive" || v === "high") return "Aggressive";
+  return DEFAULT_AI_CONFIG.escalationSensitivity;
+}
 function parseAiConfig(raw: string | null | undefined): AiConfig {
   if (!raw) return { ...DEFAULT_AI_CONFIG };
   try {
     const parsed = JSON.parse(raw) as Partial<AiConfig>;
     return {
       autoRespond: typeof parsed.autoRespond === "boolean" ? parsed.autoRespond : DEFAULT_AI_CONFIG.autoRespond,
-      escalationSensitivity: ESCALATION_SENSITIVITIES.includes(parsed.escalationSensitivity as EscalationSensitivity)
-        ? (parsed.escalationSensitivity as EscalationSensitivity)
-        : DEFAULT_AI_CONFIG.escalationSensitivity,
+      agentName:
+        typeof parsed.agentName === "string" && parsed.agentName.trim().length > 0
+          ? parsed.agentName.trim().slice(0, 60)
+          : DEFAULT_AI_CONFIG.agentName,
+      tone: AI_TONES.includes(parsed.tone as AiTone) ? (parsed.tone as AiTone) : DEFAULT_AI_CONFIG.tone,
+      responseLength: AI_RESPONSE_LENGTHS.includes(parsed.responseLength as AiResponseLength)
+        ? (parsed.responseLength as AiResponseLength)
+        : DEFAULT_AI_CONFIG.responseLength,
+      escalationSensitivity: normalizeSensitivity(parsed.escalationSensitivity),
       escalationKeywords: Array.isArray(parsed.escalationKeywords)
         ? parsed.escalationKeywords.filter((k): k is string => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
         : [],
+      monthlyBudgetCents:
+        typeof parsed.monthlyBudgetCents === "number" && Number.isFinite(parsed.monthlyBudgetCents) && parsed.monthlyBudgetCents >= 0
+          ? Math.floor(parsed.monthlyBudgetCents)
+          : DEFAULT_AI_CONFIG.monthlyBudgetCents,
     };
   } catch {
     return { ...DEFAULT_AI_CONFIG };
   }
 }
-
 /** Read the business's AI agent config (defaults when never saved). */
 export async function getAiConfig(businessId: string): Promise<AiConfig> {
   const business = await getBusinessById(businessId);
   if (!business) return { ...DEFAULT_AI_CONFIG };
   return parseAiConfig(business.aiConfigJson);
 }
-
 /** Persist a partial AI config update; returns the merged config. */
 export async function saveAiConfig(businessId: string, patch: Partial<AiConfig>): Promise<AiConfig> {
   const current = await getAiConfig(businessId);
   const next: AiConfig = {
     autoRespond: patch.autoRespond ?? current.autoRespond,
-    escalationSensitivity: ESCALATION_SENSITIVITIES.includes(patch.escalationSensitivity as EscalationSensitivity)
-      ? (patch.escalationSensitivity as EscalationSensitivity)
-      : current.escalationSensitivity,
+    agentName:
+      typeof patch.agentName === "string" && patch.agentName.trim().length > 0
+        ? patch.agentName.trim().slice(0, 60)
+        : current.agentName,
+    tone: AI_TONES.includes(patch.tone as AiTone) ? (patch.tone as AiTone) : current.tone,
+    responseLength: AI_RESPONSE_LENGTHS.includes(patch.responseLength as AiResponseLength)
+      ? (patch.responseLength as AiResponseLength)
+      : current.responseLength,
+    escalationSensitivity:
+      patch.escalationSensitivity !== undefined ? normalizeSensitivity(patch.escalationSensitivity) : current.escalationSensitivity,
     escalationKeywords: patch.escalationKeywords ?? current.escalationKeywords,
+    monthlyBudgetCents:
+      typeof patch.monthlyBudgetCents === "number" && Number.isFinite(patch.monthlyBudgetCents) && patch.monthlyBudgetCents >= 0
+        ? Math.floor(patch.monthlyBudgetCents)
+        : current.monthlyBudgetCents,
   };
   await updateBusiness(businessId, { aiConfigJson: JSON.stringify(next) });
   return next;
 }
-
+// ---------------------------------------------------------------------------
+// AI usage & cost tracking (spec §32) — rows written ONLY via the
+// record_usage tool (audited, tenant-scoped); reads are tenant-scoped here.
+// ---------------------------------------------------------------------------
+export const USAGE_KINDS = s.USAGE_KINDS;
+export type UsageKind = s.UsageKind;
+export type UsageDirection = s.UsageDirection;
+/** Start of the current UTC month (epoch ms) — the §32 rollup window. */
+export function usageMonthStartMs(nowMs: number = Date.now()): number {
+  const d = new Date(nowMs);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+}
+export function usageMonthEndMs(startMs: number): number {
+  const d = new Date(startMs);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+}
+export interface NewUsageEvent {
+  kind: UsageKind;
+  direction: UsageDirection;
+  inputTokens?: number;
+  outputTokens?: number;
+  estimatedCostCents?: number;
+  meta?: Record<string, unknown>;
+}
+export async function recordUsageEvent(businessId: string, data: NewUsageEvent): Promise<void> {
+  getDb()
+    .insert(s.usageEvents)
+    .values({
+      id: newId(),
+      businessId,
+      kind: data.kind,
+      direction: data.direction,
+      inputTokens: Math.max(0, Math.floor(data.inputTokens ?? 0)),
+      outputTokens: Math.max(0, Math.floor(data.outputTokens ?? 0)),
+      estimatedCostCents: Math.max(0, Math.floor(data.estimatedCostCents ?? 0)),
+      metaJson: JSON.stringify(data.meta ?? {}),
+      createdAt: now(),
+    })
+    .run();
+}
+export interface MonthlyUsage {
+  aiMessages: number;
+  smsMessages: number;
+  voiceMessages: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostCents: number;
+}
+/**
+ * Roll up one business's usage for the month containing `startMs` (or the
+ * current month). Tenant-scoped: only THIS business's rows are read.
+ */
+export async function getMonthlyUsage(businessId: string, startMs?: number): Promise<MonthlyUsage> {
+  const start = startMs ?? usageMonthStartMs();
+  const end = usageMonthEndMs(start);
+  const rows = getDb()
+    .select()
+    .from(s.usageEvents)
+    .where(and(eq(s.usageEvents.businessId, businessId), gte(s.usageEvents.createdAt, start), lt(s.usageEvents.createdAt, end)))
+    .all();
+  const usage: MonthlyUsage = { aiMessages: 0, smsMessages: 0, voiceMessages: 0, inputTokens: 0, outputTokens: 0, estimatedCostCents: 0 };
+  for (const r of rows) {
+    if (r.kind === "ai_message") usage.aiMessages += 1;
+    else if (r.kind === "sms") usage.smsMessages += 1;
+    else if (r.kind === "voice") usage.voiceMessages += 1;
+    usage.inputTokens += r.inputTokens;
+    usage.outputTokens += r.outputTokens;
+    usage.estimatedCostCents += r.estimatedCostCents;
+  }
+  return usage;
+}
+/** Has any notification of this kind been created since `since`? (alert dedupe) */
+export async function hasNotificationSince(businessId: string, kind: string, since: number): Promise<boolean> {
+  const rows = getDb()
+    .select({ id: s.notifications.id })
+    .from(s.notifications)
+    .where(and(eq(s.notifications.businessId, businessId), eq(s.notifications.kind, kind), gte(s.notifications.createdAt, since)))
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
 export async function listIntegrations(businessId: string) {
   return getDb().select().from(s.integrations).where(eq(s.integrations.businessId, businessId)).all();
 }
