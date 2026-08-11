@@ -82,10 +82,11 @@ try {
   r = await api("/api/business/policies", { method: "PUT", body: { cancellationPolicy: "Free cancellation up to 24h before.", financing: "No financing offered.", promotions: "None.", welcomeMessage: "Hi! Thanks for choosing Verify Plumbing — how can we help?" } });
   pass("4d. policies + welcome message", r.status === 200, `status ${r.status}`);
 
-  // 5) Configure AI
-  r = await api("/api/ai/config", { method: "PUT", body: { autoRespond: true, escalationSensitivity: "medium", escalationKeywords: ["commercial job"], welcomeMessage: "Hi! Thanks for choosing Verify Plumbing — how can we help?" } });
+  // 5) Configure AI (escalationSensitivity now uses the spec §38 values;
+  // legacy low/medium/high are still accepted and normalized server-side)
+  r = await api("/api/ai/config", { method: "PUT", body: { autoRespond: true, escalationSensitivity: "Balanced", escalationKeywords: ["commercial job"], welcomeMessage: "Hi! Thanks for choosing Verify Plumbing — how can we help?" } });
   const cfg = r.json.config ?? {};
-  pass("5. configure AI", r.status === 200 && cfg.autoRespond === true && cfg.escalationSensitivity === "medium", JSON.stringify(cfg).slice(0, 120));
+  pass("5. configure AI", r.status === 200 && cfg.autoRespond === true && cfg.escalationSensitivity === "Balanced", JSON.stringify(cfg).slice(0, 140));
 
   // complete onboarding
   r = await api("/api/business/complete-onboarding", { method: "POST", body: {} });
@@ -199,6 +200,7 @@ try {
     db.delete(s.knowledgeBase).where(eq(s.knowledgeBase.businessId, bizId)).run();
     db.delete(s.followUpConfigs).where(eq(s.followUpConfigs.businessId, bizId)).run();
     db.delete(s.notifications).where(eq(s.notifications.businessId, bizId)).run();
+    db.delete(s.usageEvents).where(eq(s.usageEvents.businessId, bizId)).run();
     db.delete(s.auditLogs).where(eq(s.auditLogs.businessId, bizId)).run();
     db.delete(s.widgetSettings).where(eq(s.widgetSettings.businessId, bizId)).run();
     db.delete(s.integrations).where(eq(s.integrations.businessId, bizId)).run();

@@ -26,6 +26,7 @@ import type {
   AiIntentResult,
   AiGenerateInput,
   AiGeneratedReply,
+  AiUsageEstimate,
 } from "./types";
 import type { Intent, ConfidenceLevel } from "../ai/intents";
 import type { ConversationMemory } from "../ai/memory";
@@ -52,7 +53,11 @@ const HOURS_RE = /\b(hours|open|close|closed|what time (are|do|is) you|when (are
 const AREA_RE = /\b(service area|do you serve|where (are|do) you (located|serve)|zip codes?|what areas|locations?|coverage)\b/i;
 const FINANCE_RE = /\b(financ\w*|payment plan|installments?|credit|afford|monthly payments?)\b/i;
 const CANCEL_POLICY_RE = /\b(cancellation policy|cancel(l)?ation (fee|notice)|reschedule policy)\b/i;
-const GREETING_RE = /^(hi|hello|hey|good (morning|afternoon|evening))[!. ]*$/i;
+/** Pure casual greetings ("hi", "hello there", "good morning", "what's up?"). */
+const GREETING_RE =
+  /^(hi|hello|hey|hiya|yo|howdy)(\s+(there|ya|everyone|everybody|all))?[!. ]*$|^good (morning|afternoon|evening)[!. ]*$|^(what'?s up|sup|how'?s it going|how are you)[!. ]*$/i;
+/** A message that STARTS with a casual greeting (may continue: "hi there, how are you?"). */
+const GREETING_PREFIX_RE = /^(hi|hello|hey|hiya|yo|howdy|good (morning|afternoon|evening)|what'?s up|sup|how'?s it going|how are you)\b/i;
 
 /** The customer is answering a qualification question (name/location/contact). */
 const INFO_ANSWER_RE =
@@ -124,6 +129,11 @@ export class MockAiProvider implements AiProvider {
     if (INFO_ANSWER_RE.test(lower)) {
       return { intent: input.memory.service ? "SERVICE_INQUIRY" : "NEW_LEAD", confidence: "MEDIUM" };
     }
+    // Casual greetings ("hi there", "hey!", "what's up?") — the receptionist
+    // answers warmly as a GENERAL_QUESTION. Never UNKNOWN: a simple hello must
+    // not trigger the low-confidence escalate path under Balanced sensitivity
+    // (spec §38 — Balanced is the standard setting, not an aggressive one).
+    if (GREETING_PREFIX_RE.test(lower)) return { intent: "GENERAL_QUESTION", confidence: "MEDIUM" };
     return { intent: "UNKNOWN", confidence: "LOW" };
   }
 
@@ -131,7 +141,25 @@ export class MockAiProvider implements AiProvider {
   // Reply generation — grounded ONLY in the provided context + memory.
   // -------------------------------------------------------------------------
 
+  /**
+   * Spec §38 shaping: the configured tone / response length / agent name are
+   * real generation parameters — the mock applies them deterministically:
+   *   tone           -> phrasing style + message signature,
+   *   responseLength -> sentence-count cap (Short 2, Medium 3, Detailed 6;
+   *                     Concise tone always caps at 2),
+   *   agentName      -> the signature ("— Sarah, your AI receptionist …").
+   * Structured replies (newline listings such as hours/availability) are never
+   * truncated. Safety replies (noAnswer) are never rewritten. Every reply
+   * reports a deterministic usage estimate (spec §32) so cost control works
+   * with no real LLM keys.
+   */
   async generateReply(input: AiGenerateInput): Promise<AiGeneratedReply> {
+    const raw = await this.rawReply(input);
+    const shaped = shapeReply(raw, input);
+    return { ...shaped, usage: estimateUsage(input, shaped.reply) };
+  }
+
+  private async rawReply(input: AiGenerateInput): Promise<AiGeneratedReply> {
     const { intent, message, memory, services, knowledge, policies, serviceArea, hasAppointment } = input;
     const lower = message.toLowerCase();
 
@@ -210,7 +238,9 @@ export class MockAiProvider implements AiProvider {
       default:
         // Spec §3 rule 1: never fabricate. The orchestrator decides clarify vs
         // escalate from sensitivity; this is the never-fabricate phrasing.
-        return { reply: UNKNOWN_CLARIFY_REPLY, answerConfidence: "LOW" };
+        // `noAnswer` flags the standardized clarify reply so the orchestrator
+        // never depends on string equality after §38 shaping is applied.
+        return { reply: UNKNOWN_CLARIFY_REPLY, answerConfidence: "LOW", noAnswer: true };
     }
   }
 
@@ -425,11 +455,102 @@ function generalAnswer(input: AiGenerateInput): AiGeneratedReply {
   const faq = findKbQuestion(knowledge, message);
   if (faq) return { reply: faq.answer, answerConfidence: "HIGH" };
 
-  if (GREETING_RE.test(message.trim())) {
+  if (GREETING_RE.test(message.trim()) || GREETING_PREFIX_RE.test(message.trim())) {
     return {
       reply: `Hi there! Thanks for reaching out to ${businessName}. How can we help?`,
       answerConfidence: "HIGH",
     };
   }
-  return { reply: UNKNOWN_CLARIFY_REPLY, answerConfidence: "LOW" };
+  return { reply: UNKNOWN_CLARIFY_REPLY, answerConfidence: "LOW", noAnswer: true };
+}
+
+// ---------------------------------------------------------------------------
+// Spec §38 reply shaping + §32 deterministic usage estimation
+// ---------------------------------------------------------------------------
+
+/** Split a plain reply into sentences (never splits newline-structured lists). */
+function sentencesOf(text: string): string[] {
+  if (text.includes("\n")) return [];
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/** Cap a conversational reply at `max` sentences; listings stay whole. */
+function capSentences(text: string, max: number): string {
+  const parts = sentencesOf(text);
+  if (!parts.length || parts.length <= max) return text;
+  return parts.slice(0, max).join(" ");
+}
+
+/** The agent's message signature — the §38 agentName, phrased per tone. */
+export function signatureFor(
+  tone: AiGenerateInput["tone"],
+  agentName: string | undefined,
+  businessName: string
+): string {
+  const name = agentName && agentName.trim().length > 0 ? agentName.trim() : "AI receptionist";
+  switch (tone) {
+    case "Friendly":
+      return ` — ${name} here — happy to help you with anything at ${businessName}!`;
+    case "Casual":
+      return ` — it's ${name} from ${businessName}!`;
+    case "Concise":
+      return ` — ${name}`;
+    case "Professional":
+    default:
+      return ` — ${name}, your AI receptionist at ${businessName}.`;
+  }
+}
+
+/**
+ * Apply the owner's tone / response length / agent name to a generated reply.
+ * Safety replies (noAnswer) are NEVER rewritten; structured listings
+ * (newlines) are never truncated; the signature is skipped on questions so the
+ * conversation stays natural (the sender name is shown in the chat UI anyway).
+ */
+function shapeReply(raw: AiGeneratedReply, input: AiGenerateInput): AiGeneratedReply {
+  if (raw.noAnswer) return raw;
+  let { reply } = raw;
+  const tone = input.tone ?? "Professional";
+  const length = input.responseLength ?? "Medium";
+
+  // responseLength -> sentence cap on the ANSWER CONTENT (Concise tone is
+  // always brief); prefix/signature are a fixed footer and never counted
+  // against the owner's length preference.
+  const maxSentences = tone === "Concise" ? 2 : length === "Short" ? 2 : length === "Detailed" ? 6 : 3;
+  reply = capSentences(reply, maxSentences);
+
+  // tone phrasing: a light deterministic marker so the tone is audible.
+  if (tone === "Casual" && !/^(hey|hi|yo)\b/i.test(reply)) reply = `Hey there! ${reply}`;
+  else if (tone === "Friendly" && /^Thanks for reaching out!/i.test(reply)) reply = reply.replace(/^Thanks for reaching out!/i, "Thanks so much for reaching out!");
+
+  // message signature (skipped on questions / when already signed).
+  const signed = signatureFor(tone, input.agentName, input.businessName);
+  if (!reply.trim().endsWith("?") && !reply.includes(input.agentName ?? "__none__")) {
+    reply = `${reply.trim()}${signed}`;
+  }
+  return { ...raw, reply };
+}
+
+/** Deterministic token count (~4 chars per token, spec §32 mock rate card). */
+export function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil((text || "").length / 4));
+}
+
+/**
+ * Deterministic per-reply usage estimate (spec §32) so cost tracking + budget
+ * alerts work with the mock provider (no real LLM keys needed). Documented
+ * rate card: $0.15 / 1M input tokens + $0.60 / 1M output tokens
+ * (GPT-4o-mini-class), floored at 1 cent per call for fixed overhead.
+ */
+export function estimateUsage(input: AiGenerateInput, reply: string): AiUsageEstimate {
+  const historyText = (input.history ?? []).map((m) => m.content).join(" ");
+  const serviceNames = (input.services ?? []).map((s) => s.name).join(" ");
+  const inputTokens = estimateTokens(`${input.message} ${historyText} ${input.businessName} ${serviceNames}`);
+  const outputTokens = estimateTokens(reply);
+  const rawCents = ((inputTokens * 0.15 + outputTokens * 0.6) / 1_000_000) * 100;
+  const estimatedCostCents = Math.max(1, Math.ceil(rawCents));
+  return { inputTokens, outputTokens, estimatedCostCents };
 }

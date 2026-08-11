@@ -52,7 +52,9 @@ async function resolveWidgetBusiness(businessId: string) {
   return { business, settings };
 }
 
-function widgetPublicConfig(business: NonNullable<Awaited<ReturnType<typeof repo.getBusinessById>>>, settings: repo.WidgetSettings) {
+async function widgetPublicConfig(business: NonNullable<Awaited<ReturnType<typeof repo.getBusinessById>>>, settings: repo.WidgetSettings) {
+  // Spec §38 — the agent's configured name shows in the widget header/status.
+  const aiConfig = await repo.getAiConfig(business.id);
   // welcomeMessage: widget setting wins, else the business's policies
   // welcomeMessage, else a sensible default.
   let welcome = settings.welcomeMessage;
@@ -68,6 +70,7 @@ function widgetPublicConfig(business: NonNullable<Awaited<ReturnType<typeof repo
   return {
     businessId: business.id,
     businessName: business.name,
+    agentName: aiConfig.agentName,
     enabled: true,
     primaryColor: settings.primaryColor,
     position: settings.position,
@@ -90,7 +93,7 @@ widgetRoutes.get("/config", rateLimit(120, 60_000), async (c) => {
   const parsed = businessIdSchema.safeParse(raw);
   if (!parsed.success) throw new HttpError(400, "businessId (uuid) is required");
   const { business, settings } = await resolveWidgetBusiness(parsed.data);
-  return c.json(widgetPublicConfig(business, settings));
+  return c.json(await widgetPublicConfig(business, settings));
 });
 
 /** Public: the demo business (Smith's HVAC) for the /widget-demo page. */
@@ -146,8 +149,10 @@ widgetRoutes.post("/chat", rateLimit(30, 60_000), async (c) => {
 
   const bundle = await handleLeadMessage(businessId, conversationId, message);
 
+  const aiConfig = await repo.getAiConfig(businessId);
   return c.json({
     conversationId: bundle.conversation.id,
+    aiName: aiConfig.agentName,
     lead: bundle.lead
       ? {
           id: bundle.lead.id,

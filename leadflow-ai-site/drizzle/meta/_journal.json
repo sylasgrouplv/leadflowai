@@ -57,6 +57,13 @@
       "when": 1786466000000,
       "tag": "0007_review_bi",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786467000000,
+      "tag": "0008_usage_tracking",
+      "breakpoints": true
     }
   ]
 }

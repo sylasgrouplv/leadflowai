@@ -46,6 +46,7 @@ import {
   UNKNOWN_ESCALATION_REPLY,
   ESCALATION_REPLY,
   CANCEL_ESCALATION_REPLY,
+  estimateUsage,
 } from "../integrations/ai";
 
 function safeJson<T>(raw: string | null, fallback: T): T {
@@ -100,8 +101,11 @@ function evaluateEscalation(opts: {
   // safety net works even if intent detection is ambiguous).
   if (ANGRY_KEYWORDS.some((k) => lower.includes(k))) return { triggered: true, reason: "angry-or-legal" };
 
-  // Uncertainty escalates on high sensitivity (spec §18 "AI lacks info").
-  if (intent === "UNKNOWN" && intentConfidence === "LOW" && aiConfig.escalationSensitivity === "high") {
+  // Uncertainty escalation thresholds (spec §38). Conservative = serious
+  // triggers only — never escalate on uncertainty (the AI keeps clarifying).
+  // Balanced = standard. Aggressive = escalate EARLY on uncertainty: any
+  // low-confidence unknown escalates before an agent even runs.
+  if (intent === "UNKNOWN" && intentConfidence === "LOW" && aiConfig.escalationSensitivity === "Aggressive") {
     return { triggered: true, reason: "low-confidence-unknown" };
   }
   return { triggered: false, reason: null };
@@ -258,6 +262,9 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestratio
     hours,
     serviceArea,
     escalation: { sensitivity: aiConfig.escalationSensitivity, keywords: aiConfig.escalationKeywords },
+    agentName: aiConfig.agentName,
+    tone: aiConfig.tone,
+    responseLength: aiConfig.responseLength,
     memory,
     lead: lead
       ? {
@@ -298,14 +305,40 @@ export async function orchestrate(input: OrchestrateInput): Promise<Orchestratio
   // Spec §26: LOW answer readiness → clarify or escalate — never fabricate.
   // A LOW answer that is already a safe grounded reply (e.g. the pricing
   // estimate phrase) stays as-is; only a genuine "no answer" (the clarify
-  // reply) triggers the clarify/escalate path.
+  // reply) triggers the clarify/escalate path. Spec §38 sensitivity gates it:
+  //   Aggressive   → any LOW-confidence answer escalates (early on uncertainty),
+  //   Balanced     → a genuine no-answer escalates (standard),
+  //   Conservative → never escalate on uncertainty; keep clarifying.
   if (!escalate && gen.answerConfidence === "LOW") {
-    const noAnswer = gen.reply === UNKNOWN_CLARIFY_REPLY;
-    if (intent === "UNKNOWN" || (noAnswer && aiConfig.escalationSensitivity === "high")) {
+    const noAnswer = gen.noAnswer === true || gen.reply === UNKNOWN_CLARIFY_REPLY;
+    if (aiConfig.escalationSensitivity === "Aggressive" || (aiConfig.escalationSensitivity === "Balanced" && noAnswer)) {
       escalate = true;
       escalationReason = "low-confidence-unknown";
       gen = { reply: UNKNOWN_ESCALATION_REPLY, answerConfidence: "LOW" };
     }
+  }
+
+  // Spec §32 — record usage for every AI reply (deterministic mock estimate
+  // today; real providers report real usage). Goes through the tool registry
+  // (audited, tenant-scoped) and the record_usage handler fires the
+  // 80/90/100% monthly budget alerts (deduped per threshold per month).
+  const usage = gen.usage ?? estimateUsage(generateInput, gen.reply);
+  try {
+    await callAiTool(
+      "record_usage",
+      { businessId, agent: agent.id, conversationId, leadId: lead?.id },
+      {
+        kind: "ai_message",
+        direction: "outbound",
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        estimated_cost_cents: usage.estimatedCostCents,
+        meta: { intent, routedAgent: agent.id, provider: provider.name },
+      }
+    );
+  } catch (e) {
+    // Usage recording must never break the conversation (spec §31).
+    console.error("[orchestrator] record_usage failed:", e);
   }
 
   // (h) Record the generated reply + answer confidence.

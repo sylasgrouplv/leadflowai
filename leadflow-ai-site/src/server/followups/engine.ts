@@ -27,6 +27,7 @@ import type { FollowUpStepConfig, FollowUpListItem } from "../db/repo";
 import { getEmailProvider, getSmsProvider } from "../integrations";
 import { emitEvent } from "../ai/events";
 import { createFollowUpStepRun } from "../automations/runs";
+import { recordSmsUsage } from "../usage/record";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -199,6 +200,8 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
       result: { provider: getSmsProvider().name, id: res.id },
       success: true,
     });
+    // Spec §32 — every SMS send counts toward the monthly usage budget.
+    await recordSmsUsage({ businessId, leadId: lead.id, agent: "followup", body, meta: { templateKey: f.templateKey ?? "" } });
   } else if (f.type === "email" && lead.email) {
     const { subject, html } = emailFor(step ?? 1, { name: businessName }, lead);
     const res = await getEmailProvider().send({ to: lead.email, subject, html });

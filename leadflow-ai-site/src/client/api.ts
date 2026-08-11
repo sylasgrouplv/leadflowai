@@ -207,22 +207,41 @@ export interface DashboardData {
 }
 
 // ---------------------------------------------------------------------------
-// AI agent config / analytics
+// AI agent config / usage (spec §38 + §32)
 // ---------------------------------------------------------------------------
-
-export type EscalationSensitivity = "low" | "medium" | "high";
-
+export type EscalationSensitivity = "Conservative" | "Balanced" | "Aggressive";
+export type AiTone = "Professional" | "Friendly" | "Casual" | "Concise";
+export type AiResponseLength = "Short" | "Medium" | "Detailed";
 export interface AiConfig {
   autoRespond: boolean;
+  agentName: string;
+  tone: AiTone;
+  responseLength: AiResponseLength;
   escalationSensitivity: EscalationSensitivity;
   escalationKeywords: string[];
+  monthlyBudgetCents: number;
 }
-
 export interface AiConfigResponse {
   config: AiConfig;
   welcomeMessage: string;
 }
-
+export interface UsageSummary {
+  aiMessages: number;
+  smsMessages: number;
+  voiceMessages: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostCents: number;
+}
+export interface BudgetStatus {
+  monthStart: number;
+  monthEnd: number;
+  usage: UsageSummary;
+  budgetCents: number;
+  percentUsed: number;
+  exhausted: boolean;
+  alerts: { threshold: number; reached: boolean }[];
+}
 export interface AnalyticsData {
   businessId: string;
   businessName: string;

@@ -227,7 +227,7 @@
     headerText.appendChild(el("div", "lfw-header-name", state.config.businessName || "Chat with us"));
     var status = el("div", "lfw-header-status");
     status.appendChild(el("span", "lfw-dot"));
-    status.appendChild(document.createTextNode("AI receptionist · online"));
+    status.appendChild(document.createTextNode((state.config.agentName || "AI receptionist") + " · online"));
     headerText.appendChild(status);
     header.appendChild(logo);
     header.appendChild(headerText);
