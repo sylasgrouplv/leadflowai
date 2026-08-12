@@ -172,7 +172,7 @@ async function wipeBusiness(id: string) {
   pass("A12 every row has phone or email", imported.every((l) => l.phone || l.email), "ok");
 
   // A13 LEAD_CREATED per row + welcome runs materialized.
-  const events = await repo.listEvents(bizId, 100);
+  const events = await repo.listEvents(bizId, { limit: 100 });
   const leadCreated = events.filter((e) => e.type === "LEAD_CREATED");
   pass("A13 LEAD_CREATED emitted per row", leadCreated.length === 4, `n=${leadCreated.length}`);
   const welcomeRuns = (await db.select().from(s.automationRuns).where(eq(s.automationRuns.businessId, bizId)).execute()).filter((r2) => r2.ruleKind === "lead_created_welcome");

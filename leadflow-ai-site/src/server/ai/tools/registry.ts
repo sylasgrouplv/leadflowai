@@ -29,6 +29,7 @@ import { setStatusAction } from "../status";
 import { checkCalendarAction, bookAppointmentAction, updateAppointmentStatusAction } from "../../appointments/agent";
 import { startSequence, stopSequence, optOutLead, sendFollowUpRow } from "../../followups/engine";
 import { requestReview, recordFeedback } from "../../reviews/agent";
+import { scheduleAppointmentReminder } from "../../reminders/agent";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
@@ -509,6 +510,17 @@ export const TOOL_REGISTRY: ToolDef[] = [
     validate: async (ctx, input) =>
       (await repo.getAppointmentById(ctx.businessId, input.appointment_id)) ? null : `appointment ${input.appointment_id} does not belong to business ${ctx.businessId}`,
     handler: async (ctx, input) => requestReview(ctx.businessId, input.appointment_id),
+    audit: true,
+  },
+  {
+    name: "schedule_appointment_reminder",
+    description:
+      "Schedule an appointment reminder for a booked appointment: computes the reminder time (appointment start minus the business's configured lead time, default 120 minutes) and persists a follow-up row + run on the automation engine (Phase 1b). Idempotent per appointment; never reminds cancelled/rescheduled appointments (re-checked at send time).",
+    permissionLevel: "WRITE",
+    inputSchema: z.object({ appointment_id: uuid("appointment_id") }),
+    validate: async (ctx, input) =>
+      (await repo.getAppointmentById(ctx.businessId, input.appointment_id)) ? null : `appointment ${input.appointment_id} does not belong to business ${ctx.businessId}`,
+    handler: async (ctx, input) => scheduleAppointmentReminder(ctx.businessId, input.appointment_id),
     audit: true,
   },
   {

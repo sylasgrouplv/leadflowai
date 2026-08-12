@@ -223,6 +223,17 @@ export async function runAutomationEngine(nowMs = Date.now()): Promise<EngineRun
         actionConfig = { ...cfg, appointment_id: appointmentId };
       }
 
+      // Appointment reminders (Phase 1b — Chunk D): the appointment id lives
+      // in the APPOINTMENT_BOOKED event payload captured on the run — forward
+      // it so the schedule_appointment_reminder action can schedule the
+      // reminder (idempotent; re-checked at send time).
+      if (action === "schedule_appointment_reminder") {
+        const payload = safeJson(run.payloadJson, {}) as Record<string, unknown>;
+        const cfg = (actionConfig ?? {}) as Record<string, unknown>;
+        const appointmentId = payload.appointmentId ?? payload.appointment_id ?? cfg.appointment_id ?? cfg.appointmentId ?? "";
+        actionConfig = { ...cfg, appointment_id: appointmentId };
+      }
+
       const res = await executeAction({ businessId: run.businessId, leadId: run.leadId, action, actionConfig });
       if (res.ok) {
         await repo.updateAutomationRun(run.businessId, run.id, { status: "done", attempts: run.attempts + 1, lastError: "" });

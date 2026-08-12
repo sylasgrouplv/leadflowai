@@ -116,6 +116,17 @@ export async function executeAction(opts: {
         return { ok: true, result: res };
       }
 
+      case "schedule_appointment_reminder": {
+        // The appointment id comes from the APPOINTMENT_BOOKED run payload —
+        // the engine forwards it into actionConfig before this switch runs.
+        // The action computes the reminder time (startAt minus the business's
+        // configured lead time) and persists the reminder follow-up + run.
+        const appointmentId = typeof config.appointment_id === "string" ? config.appointment_id : null;
+        if (!appointmentId) return { ok: false, error: "no-appointmentId-in-config" };
+        const res = await callAiTool("schedule_appointment_reminder", ctx, { appointment_id: appointmentId });
+        return { ok: true, result: res };
+      }
+
       default:
         return { ok: false, error: `unknown-action:${opts.action}` };
     }

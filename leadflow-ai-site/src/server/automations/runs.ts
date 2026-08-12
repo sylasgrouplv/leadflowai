@@ -31,3 +31,35 @@ export async function createFollowUpStepRun(businessId: string, spec: FollowUpRu
     payload: { followUpId: spec.followUpId, step: stepNumber(spec.templateKey), templateKey: spec.templateKey, type: spec.type },
   });
 }
+
+export interface AppointmentReminderRunSpec {
+  leadId: string;
+  followUpId: string;
+  scheduledFor: number;
+  type: string;
+  appointmentId: string;
+  startAt: number;
+}
+
+/**
+ * Run backing an appointment-reminder follow-up row (dogfooding Phase 1b —
+ * gap-analysis Chunk D). ruleKind "followup_step_send" so the engine's send
+ * path and pending-row pre-check apply; the payload carries the appointment id
+ * + start time so the reminder can re-check the appointment at fire time.
+ */
+export async function createAppointmentReminderRun(businessId: string, spec: AppointmentReminderRunSpec) {
+  return repo.createAutomationRun({
+    businessId,
+    leadId: spec.leadId,
+    ruleKind: "followup_step_send",
+    runAt: spec.scheduledFor,
+    payload: {
+      followUpId: spec.followUpId,
+      step: null,
+      templateKey: "appointment_reminder",
+      type: spec.type,
+      appointmentId: spec.appointmentId,
+      startAt: spec.startAt,
+    },
+  });
+}

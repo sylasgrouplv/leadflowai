@@ -383,6 +383,16 @@ export async function rescheduleAppointmentAction(
     title: `Appointment rescheduled — ${lead ? `${lead.firstName} ${lead.lastName}`.trim() : "lead"}`,
     body: `${service?.name ?? "Service"} moved to ${fmtShort(input.startAt)}`,
   });
+  // Phase 1b (Chunk D): a reschedule re-emits APPOINTMENT_BOOKED so the
+  // automation engine refreshes the appointment reminder for the NEW time —
+  // the reminder rule's idempotency cancels the stale pending reminder and
+  // schedules a fresh one (never reminds at the old time).
+  await emitEvent({
+    type: "APPOINTMENT_BOOKED",
+    businessId,
+    leadId: appointment.leadId,
+    payload: { appointmentId: appointment.id, serviceId: appointment.serviceId ?? null, startAt: input.startAt, endAt, serviceName: service?.name ?? null },
+  });
   await repo.logAgentAction(businessId, {
     agent: "appointment",
     action: "reschedule_appointment",

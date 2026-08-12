@@ -802,8 +802,12 @@ export async function listDueFollowUps(limit = 100, nowMs = now()) {
 }
 
 /** Cancel a lead's not-yet-sent follow-ups (stop rules: booked / customer / opt-out / manual stop).
- *  Also cancels the lead's pending automation runs so a stopped sequence can
- *  never fire (Brain 3 — the engine re-checks the row at fire time too). */
+ *  Also cancels each cancelled row's own automation run so a stopped sequence
+ *  can never fire (Brain 3 — the engine re-checks the row at fire time too).
+ *  Appointment-reminder rows (Phase 1b, templateKey "appointment_reminder")
+ *  are EXCLUDED: the Reminder Agent owns them and re-checks the appointment at
+ *  fire time, so a booked lead's reminder must survive the booking stop-rule
+ *  (it cancels itself for cancelled/rescheduled appointments). */
 export async function cancelFollowUpsForLead(businessId: string, leadId: string, opts: { keep?: string[] } = {}) {
   const db = getDb();
   const rows = await db
@@ -811,14 +815,17 @@ export async function cancelFollowUpsForLead(businessId: string, leadId: string,
     .from(s.followUps)
     .where(and(eq(s.followUps.businessId, businessId), eq(s.followUps.leadId, leadId), sql`${s.followUps.status} IN ('pending', 'paused')`))
     .execute();
+  let cancelled = 0;
   for (const r of rows) {
-    if (opts.keep?.includes(r.templateKey ?? "")) continue;
+    if (opts.keep?.includes(r.templateKey ?? "") || r.templateKey === "appointment_reminder") continue;
     await db.update(s.followUps).set({ status: "cancelled", updatedAt: now() }).where(eq(s.followUps.id, r.id)).execute();
+    cancelled += 1;
+    const run = await getRunForFollowUp(r.id);
+    if (run && ["pending", "running"].includes(run.status)) {
+      await db.update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, run.id)).execute();
+    }
   }
-  if (rows.length) {
-    await cancelAutomationRunsForLead(businessId, leadId);
-  }
-  return rows.length;
+  return cancelled;
 }
 
 // ---------------------------------------------------------------------------

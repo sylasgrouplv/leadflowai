@@ -29,6 +29,7 @@ import { emitEvent } from "../ai/events";
 import { createFollowUpStepRun } from "../automations/runs";
 import { recordSmsUsage } from "../usage/record";
 import { isAgentEnabled } from "../platform/settings";
+import { REMINDER_TEMPLATE_KEY, sendAppointmentReminder } from "../reminders/agent";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -41,6 +42,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 //     Phase 1a: our own Adrian, MI campaign runs on this branch). Honest
 //     outreach: no invented claims about the prospect, no fake urgency,
 //     STOP/unsubscribe language on every message.
+// Appointment reminders (`appointment_reminder` — Phase 1b) are a third
+// family, delegated to the Reminder Agent (src/server/reminders/agent.ts) for
+// their send path; they flow through this engine's ONE send entry point.
 // ---------------------------------------------------------------------------
 
 function leadName(lead: { firstName: string; lastName: string | null }): string {
@@ -249,6 +253,24 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
   if (!lead) {
     await repo.updateFollowUp(businessId, f.id, { status: "cancelled" });
     return { followUpId, status: "cancelled", step: stepFor(f), reason: "no-lead" };
+  }
+  // Appointment reminders (Phase 1b — Chunk D): the reminder branch runs
+  // BEFORE the generic stop rules — a reminder exists BECAUSE the lead booked,
+  // so the "appointment_booked" stop rule must not cancel it. The reminder
+  // agent re-checks the appointment is still booked/confirmed at fire time and
+  // cancels itself silently for cancelled/rescheduled/already-started
+  // appointments (never sends a stale reminder).
+  if (f.templateKey === REMINDER_TEMPLATE_KEY) {
+    const run = await repo.getRunForFollowUp(f.id);
+    let payload: Record<string, unknown> = {};
+    if (run) {
+      try {
+        payload = JSON.parse(run.payloadJson || "{}");
+      } catch {
+        /* unparsable — the reminder send will cancel (no appointment id) */
+      }
+    }
+    return sendAppointmentReminder(businessId, f, lead, payload);
   }
   // Stop rules evaluated at send time (safety over schedule).
   if (lead.optedOut === 1 || ["appointment_booked", "customer"].includes(lead.status)) {
