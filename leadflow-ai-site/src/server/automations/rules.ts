@@ -12,6 +12,11 @@
  *   4. JOB_COMPLETED         → send_review_request     (AI BRAIN 4 — Review
  *                            Agent, spec §21; delayed by the business's
  *                            configured review delay, default 1 day)
+ *   5. APPOINTMENT_BOOKED    → schedule_appointment_reminder (dogfooding
+ *                            Phase 1b — schedules a reminder at appointment
+ *                            start minus the business's lead time, default
+ *                            120 minutes; re-checks the appointment at fire
+ *                            time; never reminds cancelled/rescheduled ones)
  *
  * `ensureDefaultRulesForBusiness` is NAME-based (not count-based): businesses
  * that predate a new default rule pick it up on the next scheduler tick
@@ -20,7 +25,7 @@
  */
 import * as repo from "../db/repo";
 
-export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review"] as const;
+export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder"] as const;
 export type DefaultRuleName = (typeof DEFAULT_RULE_NAMES)[number];
 
 export interface DefaultRuleSpec {
@@ -68,6 +73,17 @@ export const DEFAULT_RULES: DefaultRuleSpec[] = [
     condition: { type: "none" },
     action: "send_review_request",
     actionConfig: {},
+  },
+  {
+    name: "appointment_reminder",
+    triggerEvent: "APPOINTMENT_BOOKED",
+    // delayMs 0: the action computes the reminder offset from the appointment's
+    // startAt (start minus `reminder_minutes`, default 120). Per-business lead
+    // time lives in this rule's actionConfig (config-only, no schema change).
+    delayMs: 0,
+    condition: { type: "none" },
+    action: "schedule_appointment_reminder",
+    actionConfig: { reminder_minutes: 120 },
   },
 ];
 

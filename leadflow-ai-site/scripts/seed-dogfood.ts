@@ -21,7 +21,10 @@
  *     review surface exists for LeadFlow AI yet; never fabricate a URL)
  *   - the tenant's default automation rules (explicitly, via
  *     ensureDefaultRulesForBusiness — the seed path does NOT auto-create them
- *     because the lazy creator only runs on scheduler ticks)
+ *     because the lazy creator only runs on scheduler ticks). Phase 1b adds
+ *     `appointment_reminder` (APPOINTMENT_BOOKED → schedule_appointment_reminder,
+ *     lead time from the rule's actionConfig, default 120 min) to the defaults,
+ *     so the dogfood tenant gets appointment reminders like every new tenant.
  *
  * Idempotent: skips creation if the owner user already exists (same approach
  * as db/seed.ts) and always re-ensures default automation rules.
@@ -190,9 +193,19 @@ export async function seedDogfood() {
  * Ensure the tenant's default automation rules exist (name-based, idempotent).
  * The lazy ensureDefaultRulesForBusiness path only runs on scheduler ticks, so
  * the seed creates them explicitly to guarantee a fully-wired tenant.
+ * Phase 1b: verifies the appointment_reminder rule (APPOINTMENT_BOOKED →
+ * schedule_appointment_reminder) is present — existing tenants pick it up on
+ * the next seed run / scheduler tick without touching their other rules.
  */
 export async function ensureDogfoodRules(businessId: string): Promise<boolean> {
-  return ensureDefaultRulesForBusiness(businessId);
+  const created = await ensureDefaultRulesForBusiness(businessId);
+  const rules = await repo.listAutomationRules(businessId);
+  const reminder = rules.find((r) => r.name === "appointment_reminder");
+  if (!reminder) throw new Error(`[seed-dogfood] appointment_reminder rule missing for ${businessId}`);
+  console.log(
+    `[seed-dogfood] rules: ${rules.map((r) => r.name).sort().join(", ")} · appointment_reminder=${reminder.action} delayMs=${reminder.delayMs}`
+  );
+  return created;
 }
 
 if (import.meta.main) {
