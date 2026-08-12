@@ -62,6 +62,9 @@ const NAME_PATTERNS: Array<RegExp> = [
  * the website widget's "Website Visitor") — real names from chat may replace
  * them. */
 export const PLACEHOLDER_NAME_RE = /^(website|visitor|new|lead|web|anonymous)$/i;
+/** Location/connective false starts that must never be taken as a first name
+ * (mirrors memory.ts — kept local to avoid a circular import). */
+const BAD_NAME_START_RE = /^(in|at|near|from|the|a|my|our|i|im|located|around|on|for|please|can|could|need|have|is|am)$/i;
 
 function words(text: string): Set<string> {
   return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 1));
@@ -109,8 +112,12 @@ export function extractInfo(lead: LeadRow | null, text: string, services: { name
   if (email && !lead?.email) out.email = email[0].toLowerCase();
   if (out.phone || out.email) out.hasContact = true;
 
-  // Name.
-  if (!lead?.firstName || PLACEHOLDER_NAME_RE.test(lead.firstName) || PLACEHOLDER_NAME_RE.test(lead.lastName ?? "")) {
+  // Name — only replace a missing/placeholder FIRST name. A real collected
+  // name is never overwritten: a placeholder last name ("Visitor") alone must
+  // not re-open extraction, or "I'm in Adrian" would clobber a real first name
+  // with "in". Location/connective false starts are rejected (same guard as
+  // memory.ts) so "I'm in Springfield" never yields a first name of "in".
+  if (!lead?.firstName || PLACEHOLDER_NAME_RE.test(lead.firstName)) {
     for (const re of NAME_PATTERNS) {
       const m = text.match(re);
       if (m) {
@@ -119,8 +126,11 @@ export function extractInfo(lead: LeadRow | null, text: string, services: { name
         const stop = /(\s+(?:and|but|my|i'?m|i\s|at|in|near|located|on|for|please|thanks|thank|can|could|need|have)\b)/i;
         const name = m[1].trim().split(stop)[0];
         const parts = name.split(/\s+/);
-        out.firstName = parts[0].replace(/[^a-zA-Z' -]/g, "");
-        if (parts.length > 1) out.lastName = parts.slice(1).join(" ").replace(/[^a-zA-Z' -]/g, "");
+        const first = parts[0].replace(/[^a-zA-Z' -]/g, "");
+        if (!BAD_NAME_START_RE.test(first)) {
+          out.firstName = first;
+          if (parts.length > 1) out.lastName = parts.slice(1).join(" ").replace(/[^a-zA-Z' -]/g, "");
+        }
         break;
       }
     }
