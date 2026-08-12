@@ -12,11 +12,14 @@
  */
 import { Hono } from "hono";
 import { z } from "zod";
+import { randomBytes } from "node:crypto";
 import { attachUser, HttpError, requireAdmin } from "../auth/guards";
 import * as repo from "../db/repo";
 import { getDb } from "../db/client";
 import * as s from "../db/schema";
 import { count, desc, eq, inArray } from "drizzle-orm";
+import { hashPassword } from "../auth/password";
+import { ensureDefaultRulesForBusiness } from "../automations/rules";
 import { AGENT_KEYS, getAgentSwitches, getGlobalDefaults, setAgentSwitches, setGlobalDefaults, type AgentKey } from "../platform/settings";
 
 export const adminRoutes = new Hono();
@@ -176,4 +179,98 @@ adminRoutes.put("/ai", async (c) => {
     agents: agents ?? (await getAgentSwitches()),
     defaults: defaults ?? (await getGlobalDefaults()),
   });
+});
+
+// ---------------------------------------------------------------------------
+// ADMIN TENANT PROVISIONING — POST /api/admin/businesses (dogfooding Chunk A)
+//
+// Platform admins create a customer's business + owner account in one call,
+// reusing the same repo helpers as db/seed.ts so behavior is identical to the
+// seed script (owner user -> business -> team member -> integrations ->
+// subscription -> widget settings -> default automation rules).
+//
+// Request:  { businessName, ownerEmail, ownerName, serviceArea?, services?,
+//             knowledgeBase?, ownerPassword? }
+// Response: { business, owner, temporaryPassword } — the temporary password is
+//            generated when the caller doesn't supply one, and returned ONCE
+//            so the admin can hand it to the customer.
+// ---------------------------------------------------------------------------
+const adminBusinessServiceSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(1000).optional(),
+  priceCents: z.number().int().min(0).max(100_000_000).optional(),
+  durationMin: z.number().int().min(1).max(1440).optional(),
+});
+const adminBusinessKnowledgeSchema = z.object({
+  kind: z.enum(s.KB_KINDS),
+  question: z.string().max(300).optional(),
+  answer: z.string().min(1).max(4000),
+});
+const adminBusinessSchema = z.object({
+  businessName: z.string().min(2, "Business name is required").max(120),
+  ownerEmail: z.string().email("A valid owner email is required").max(254),
+  ownerName: z.string().min(1, "Owner name is required").max(120),
+  /** Optional: when absent, a random temporary password is generated + returned once. */
+  ownerPassword: z.string().min(8).max(128).optional(),
+  serviceArea: z
+    .object({
+      zipCodes: z.array(z.string().max(12)).max(200).default([]),
+      cities: z.array(z.string().max(80)).max(200).default([]),
+    })
+    .optional(),
+  services: z.array(adminBusinessServiceSchema).max(20).optional(),
+  knowledgeBase: z.array(adminBusinessKnowledgeSchema).max(50).optional(),
+});
+
+adminRoutes.post("/businesses", async (c) => {
+  const user = await requireAdmin(c);
+  const body = await c.req.json().catch(() => null);
+  const parsed = adminBusinessSchema.safeParse(body);
+  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message ?? "Invalid input");
+
+  const email = parsed.data.ownerEmail.toLowerCase();
+  if (await repo.getUserByEmail(email)) throw new HttpError(409, "A user with that email already exists.");
+
+  const temporaryPassword = parsed.data.ownerPassword ?? randomBytes(9).toString("base64url");
+  const owner = await repo.createUser({
+    name: parsed.data.ownerName,
+    email,
+    passwordHash: hashPassword(temporaryPassword),
+    role: "owner",
+  });
+  const business = await repo.createBusiness({ ownerId: owner.id, name: parsed.data.businessName });
+
+  if (parsed.data.serviceArea) {
+    await repo.updateBusiness(business.id, { serviceAreaJson: JSON.stringify(parsed.data.serviceArea) });
+  }
+  for (const sv of parsed.data.services ?? []) {
+    await repo.addService(business.id, {
+      name: sv.name,
+      description: sv.description ?? "",
+      priceCents: sv.priceCents ?? 0,
+      durationMin: sv.durationMin ?? 60,
+    });
+  }
+  for (const k of parsed.data.knowledgeBase ?? []) {
+    await repo.addKnowledge(business.id, { kind: k.kind, question: k.question ?? "", answer: k.answer });
+  }
+
+  // Same default rules the seed script guarantees (explicit, not lazy).
+  await ensureDefaultRulesForBusiness(business.id);
+
+  await repo.audit(business.id, user.id, "admin.business.create", "business", business.id, {
+    name: business.name,
+    ownerEmail: email,
+    services: parsed.data.services?.length ?? 0,
+    knowledgeBase: parsed.data.knowledgeBase?.length ?? 0,
+  });
+
+  return c.json(
+    {
+      business: { id: business.id, name: business.name },
+      owner: { id: owner.id, name: owner.name, email: owner.email },
+      temporaryPassword,
+    },
+    201
+  );
 });
