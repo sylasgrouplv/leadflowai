@@ -10,7 +10,7 @@
 import * as repo from "../db/repo";
 
 function stepNumber(templateKey: string | null): number | null {
-  const m = /^seq_(\d+)$/.exec(templateKey ?? "");
+  const m = /^(?:seq_|sales_)(\d+)$/.exec(templateKey ?? "");
   return m ? Number(m[1]) : null;
 }
 

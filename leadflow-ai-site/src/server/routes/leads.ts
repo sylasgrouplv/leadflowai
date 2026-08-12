@@ -73,11 +73,13 @@ leadRoutes.get("/", async (c) => {
   const q = c.req.query("q") ?? "";
   const status = c.req.query("status") ?? "";
   const score = c.req.query("score") ?? "";
+  const source = c.req.query("source") ?? "";
   const sort = c.req.query("sort") === "oldest" ? "oldest" : "newest";
   const rows = await repo.searchLeads(business.id, {
     q,
     status,
     score,
+    source,
     sort,
     assignedTo: user.role === "employee" ? user.id : undefined,
   });
