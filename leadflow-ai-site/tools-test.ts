@@ -85,7 +85,7 @@ function resultOf(a: { resultJson: string | null }) {
 console.log("\n== (a) tool registry ==");
 
 const expectedRead = ["get_business_info", "get_lead", "get_service", "check_calendar"];
-const expectedWrite = ["create_lead", "update_lead", "set_lead_status", "score_lead", "schedule_followup", "stop_followup", "opt_out", "book_appointment", "send_message", "send_followup", "send_review_request", "schedule_appointment_reminder", "record_feedback", "create_human_task", "record_usage"];
+const expectedWrite = ["create_lead", "update_lead", "set_lead_status", "score_lead", "schedule_followup", "stop_followup", "opt_out", "book_appointment", "send_message", "send_followup", "send_review_request", "schedule_appointment_reminder", "schedule_onboarding_reminders", "record_feedback", "create_human_task", "record_usage"];
 const expectedHighRisk = ["cancel_appointment", "refund", "change_billing", "modify_sensitive_data"];
 
 const readTools = TOOL_REGISTRY.filter((t) => t.permissionLevel === "READ").map((t) => t.name);

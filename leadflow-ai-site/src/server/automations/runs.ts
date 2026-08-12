@@ -63,3 +63,35 @@ export async function createAppointmentReminderRun(businessId: string, spec: App
     },
   });
 }
+
+export interface OnboardingReminderRunSpec {
+  leadId: string;
+  followUpId: string;
+  scheduledFor: number;
+  type: string;
+  step: number;
+  businessCreatedAt: number;
+}
+
+/**
+ * Run backing an onboarding setup-step reminder follow-up row (dogfooding
+ * Phase 2 — Chunk E). ruleKind "followup_step_send" so the engine's send path
+ * and pending-row pre-check apply; the payload carries the step + business
+ * creation time so the reminder can re-check the step is still incomplete at
+ * fire time (completed step → cancelled, never sent).
+ */
+export async function createOnboardingReminderRun(businessId: string, spec: OnboardingReminderRunSpec) {
+  return repo.createAutomationRun({
+    businessId,
+    leadId: spec.leadId,
+    ruleKind: "followup_step_send",
+    runAt: spec.scheduledFor,
+    payload: {
+      followUpId: spec.followUpId,
+      step: spec.step,
+      templateKey: `onboarding_step_${spec.step}`,
+      type: spec.type,
+      businessCreatedAt: spec.businessCreatedAt,
+    },
+  });
+}

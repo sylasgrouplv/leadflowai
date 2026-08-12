@@ -20,6 +20,7 @@ import * as s from "../db/schema";
 import { count, desc, eq, inArray } from "drizzle-orm";
 import { hashPassword } from "../auth/password";
 import { ensureDefaultRulesForBusiness } from "../automations/rules";
+import { emitEvent } from "../ai/events";
 import { AGENT_KEYS, getAgentSwitches, getGlobalDefaults, setAgentSwitches, setGlobalDefaults, type AgentKey } from "../platform/settings";
 
 export const adminRoutes = new Hono();
@@ -257,6 +258,17 @@ adminRoutes.post("/businesses", async (c) => {
 
   // Same default rules the seed script guarantees (explicit, not lazy).
   await ensureDefaultRulesForBusiness(business.id);
+
+  // Dogfooding Phase 2 — Chunk E: every new tenant gets its onboarding
+  // setup-step reminders (knowledge base / calendar / services / widget at
+  // day 1/3/7/14) through the default `onboarding_reminders` rule. The event
+  // materializes a run for that rule; the engine schedules the reminders on
+  // its next tick.
+  await emitEvent({
+    type: "BUSINESS_CREATED",
+    businessId: business.id,
+    payload: { businessName: business.name, ownerEmail: email },
+  });
 
   await repo.audit(business.id, user.id, "admin.business.create", "business", business.id, {
     name: business.name,
