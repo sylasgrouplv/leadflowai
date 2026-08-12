@@ -396,6 +396,17 @@ export async function listLeads(businessId: string, limit = 100) {
   return await getDb().select().from(s.leads).where(eq(s.leads.businessId, businessId)).orderBy(desc(s.leads.createdAt)).limit(limit).execute();
 }
 
+/** Leads of one source (e.g. source='prospect_import') — campaign views. */
+export async function listLeadsBySource(businessId: string, source: string, limit = 100_000) {
+  return await getDb()
+    .select()
+    .from(s.leads)
+    .where(and(eq(s.leads.businessId, businessId), eq(s.leads.source, source)))
+    .orderBy(desc(s.leads.createdAt))
+    .limit(limit)
+    .execute();
+}
+
 export async function updateLead(businessId: string, id: string, patch: Partial<typeof s.leads.$inferInsert>) {
   const existing = await getLeadById(businessId, id);
   if (!existing) return null;
@@ -466,6 +477,7 @@ export interface LeadSearch {
   q?: string;
   status?: string;
   score?: string;
+  source?: string;
   sort?: "newest" | "oldest";
   assignedTo?: string; // filter: only leads assigned to this user
 }
@@ -475,6 +487,7 @@ export async function searchLeads(businessId: string, opts: LeadSearch = {}, lim
   const conds: SQL[] = [eq(s.leads.businessId, businessId)];
   if (opts.status && s.LEAD_STATUSES.includes(opts.status as LeadStatus)) conds.push(eq(s.leads.status, opts.status as LeadStatus));
   if (opts.score && s.LEAD_SCORES.includes(opts.score as LeadScore)) conds.push(eq(s.leads.score, opts.score as LeadScore));
+  if (opts.source) conds.push(eq(s.leads.source, opts.source));
   if (opts.assignedTo) conds.push(eq(s.leads.assignedTo, opts.assignedTo));
   if (opts.q) {
     const like = `%${opts.q.replace(/[%_]/g, "")}%`;

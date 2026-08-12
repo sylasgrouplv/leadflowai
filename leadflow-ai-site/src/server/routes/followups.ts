@@ -52,7 +52,7 @@ export const followUpRoutes = new Hono();
 followUpRoutes.use("*", attachUser);
 
 function stepLabel(templateKey: string | null): { step: number | null; label: string } {
-  const m = /^seq_(\d+)$/.exec(templateKey ?? "");
+  const m = /^(?:seq_|sales_)(\d+)$/.exec(templateKey ?? "");
   if (m) return { step: Number(m[1]), label: `Step ${m[1]}` };
   if (templateKey === "manual") return { step: null, label: "Manual" };
   if (templateKey === "appointment_reminder") return { step: null, label: "Reminder" };

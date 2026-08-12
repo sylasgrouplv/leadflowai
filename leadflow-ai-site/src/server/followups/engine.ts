@@ -34,13 +34,33 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Templates (plain, honest, no manufactured urgency)
+//
+// Two template families, selected by the follow-up row's templateKey:
+//   - `seq_<n>`   — the customer follow-up sequence (a service inquiry),
+//   - `sales_<n>` — the outbound SALES cadence for prospects (dogfooding
+//     Phase 1a: our own Adrian, MI campaign runs on this branch). Honest
+//     outreach: no invented claims about the prospect, no fake urgency,
+//     STOP/unsubscribe language on every message.
 // ---------------------------------------------------------------------------
 
 function leadName(lead: { firstName: string; lastName: string | null }): string {
   return `${lead.firstName} ${lead.lastName ?? ""}`.trim() || "there";
 }
 
-function smsBodyFor(step: number, business: { name: string }, lead: { firstName: string; lastName: string | null; serviceRequested: string | null }): string {
+interface TemplateLead {
+  firstName: string;
+  lastName: string | null;
+  serviceRequested: string | null;
+  location?: string | null;
+}
+
+/** Sales template family: templateKey prefix `sales_`. */
+function isSalesTemplate(templateKey: string | null): boolean {
+  return /^sales_/.test(templateKey ?? "");
+}
+
+function smsBodyFor(step: number, business: { name: string }, lead: TemplateLead, templateKey: string | null): string {
+  if (isSalesTemplate(templateKey)) return salesSmsBodyFor(step, business, lead);
   const first = lead.firstName || "there";
   const service = lead.serviceRequested ? ` about your ${lead.serviceRequested.toLowerCase()}` : "";
   const onService = lead.serviceRequested ? ` on your ${lead.serviceRequested.toLowerCase()}` : "";
@@ -50,7 +70,8 @@ function smsBodyFor(step: number, business: { name: string }, lead: { firstName:
   return `Hi ${first}, last note from ${business.name} — if your ${lead.serviceRequested?.toLowerCase() || "project"} is still on your mind, we're here. Otherwise we'll close your file. (Reply STOP to opt out.)`;
 }
 
-function emailFor(step: number, business: { name: string }, lead: { firstName: string; lastName: string | null; serviceRequested: string | null }) {
+function emailFor(step: number, business: { name: string }, lead: TemplateLead, templateKey: string | null) {
+  if (isSalesTemplate(templateKey)) return salesEmailFor(step, business, lead);
   const first = lead.firstName || "there";
   const service = lead.serviceRequested ? ` regarding your ${lead.serviceRequested.toLowerCase()}` : "";
   const subject = step <= 2 ? `${business.name} — quick follow-up${service}` : `${business.name} — checking in${service}`;
@@ -59,11 +80,68 @@ function emailFor(step: number, business: { name: string }, lead: { firstName: s
 }
 
 // ---------------------------------------------------------------------------
+// Sales cadence templates (day 1 SMS intro / day 3 value / day 7 proof /
+// day 14 direct CTA). Addressed to a home-services business owner; the lead's
+// name is the business name for imported campaign prospects.
+// ---------------------------------------------------------------------------
+
+const SALES_FOOTER = (business: { name: string }) =>
+  `<p style="color:#888;font-size:12px">Sent by ${business.name} via LeadFlow AI. Reply "STOP" or "unsubscribe" to opt out.</p>`;
+
+function salesSmsBodyFor(step: number, business: { name: string }, lead: TemplateLead): string {
+  const name = leadName(lead);
+  if (step === 1) {
+    // Day 1 — brief intro.
+    return `Hi ${name}, this is ${business.name}. We help local service businesses answer every lead fast and book more jobs automatically — no missed calls. Worth a 15-minute call this week? Reply and we'll set a time. (Reply STOP to opt out.)`;
+  }
+  if (step === 2) {
+    // Day 3 — follow-up on the intro.
+    return `Hi ${name}, following up from ${business.name} — a quick 15-minute call to show how automated lead response works for ${lead.serviceRequested?.toLowerCase() || "your business"}? Reply and we'll find a time. (Reply STOP to opt out.)`;
+  }
+  if (step === 3) {
+    // Day 7 — honest proof.
+    return `Hi ${name}, ${business.name} here. We run our own sales outreach on LeadFlow AI — these messages are scheduled and sent by the platform automatically. Happy to show you how it works. (Reply STOP to opt out.)`;
+  }
+  // Day 14 — close.
+  return `Hi ${name}, last note from ${business.name}. If faster lead response is on your list this year, reply and we'll set up a quick walkthrough; otherwise we'll close your file. (Reply STOP to opt out.)`;
+}
+
+function salesEmailFor(step: number, business: { name: string }, lead: TemplateLead) {
+  const name = leadName(lead);
+  const trade = lead.serviceRequested?.toLowerCase() || "local service";
+  if (step <= 2) {
+    // Day 3 — value prop.
+    const subject = `${business.name} — ${name}: answering every lead automatically`;
+    const html = `<p>Hi ${name},</p>
+<p>We help ${trade} businesses turn more calls and web leads into booked jobs. LeadFlow AI answers instantly, day or night, qualifies and scores every lead, books appointments on your real calendar, and follows up automatically with prospects who don't convert — so no lead falls through the cracks.</p>
+<p>We're reaching out to home-services businesses in Adrian to show how it works. If that's useful, reply to this email and we'll set up a 15-minute call.</p>
+${SALES_FOOTER(business)}`;
+    return { subject, html };
+  }
+  if (step === 3) {
+    // Day 7 — proof/social proof, honest (we dogfood the product).
+    const subject = `${business.name} — how we run our own outreach (automated)`;
+    const html = `<p>Hi ${name},</p>
+<p>One thing worth knowing: LeadFlow AI runs its own operations on its platform. These follow-up emails are scheduled and sent automatically by the same engine we'd use for your business — our outbound campaign in Adrian runs entirely through the product.</p>
+<p>If you'd like to see the owner dashboard, the AI receptionist, and how follow-up sequences like this one are built, reply and we'll walk you through it live.</p>
+${SALES_FOOTER(business)}`;
+    return { subject, html };
+  }
+  // Day 14 — direct call-to-action.
+  const subject = `${business.name} — last note for ${name}`;
+  const html = `<p>Hi ${name},</p>
+<p>This is our last automated follow-up — after this we'll close your file and you won't hear from us again unless you reach out.</p>
+<p>If automating your lead response is a priority this year, reply to this email and we'll find 15 minutes to show you how it works for a ${trade} business like yours. If not, no hard feelings — you can also opt out anytime.</p>
+${SALES_FOOTER(business)}`;
+  return { subject, html };
+}
+
+// ---------------------------------------------------------------------------
 // Sequence control
 // ---------------------------------------------------------------------------
 
 function stepFor(followUp: { templateKey: string | null }): number | null {
-  const m = /^seq_(\d+)$/.exec(followUp.templateKey ?? "");
+  const m = /^(?:seq_|sales_)(\d+)$/.exec(followUp.templateKey ?? "");
   return m ? Number(m[1]) : null;
 }
 
@@ -95,7 +173,7 @@ export async function startSequence(businessId: string, leadId: string): Promise
   if (!first) return { started: false, scheduledFor: null, reason: "sequence-disabled" };
 
   const existing = await repo.listFollowUpsWithLead(businessId, 500);
-  const hasPendingSeq = existing.some((r) => r.followUp.leadId === leadId && /^seq_/.test(r.followUp.templateKey ?? "") && ["pending", "paused"].includes(r.followUp.status));
+  const hasPendingSeq = existing.some((r) => r.followUp.leadId === leadId && /^(?:seq_|sales_)/.test(r.followUp.templateKey ?? "") && ["pending", "paused"].includes(r.followUp.status));
   if (hasPendingSeq) return { started: false, scheduledFor: null, reason: "already-scheduled" };
 
   const scheduledFor = Date.now() + first.days * DAY_MS;
@@ -217,7 +295,7 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
   const business = await repo.getBusinessById(businessId);
   const businessName = business?.name ?? "Your service provider";
   if (f.type === "sms" && lead.phone) {
-    const body = smsBodyFor(step ?? 1, { name: businessName }, lead);
+    const body = smsBodyFor(step ?? 1, { name: businessName }, lead, f.templateKey);
     const res = await getSmsProvider().send({ to: lead.phone, body });
     await repo.logAgentAction(businessId, {
       agent: "followup",
@@ -230,7 +308,7 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
     // Spec §32 — every SMS send counts toward the monthly usage budget.
     await recordSmsUsage({ businessId, leadId: lead.id, agent: "followup", body, meta: { templateKey: f.templateKey ?? "" } });
   } else if (f.type === "email" && lead.email) {
-    const { subject, html } = emailFor(step ?? 1, { name: businessName }, lead);
+    const { subject, html } = emailFor(step ?? 1, { name: businessName }, lead, f.templateKey);
     const res = await getEmailProvider().send({ to: lead.email, subject, html });
     await repo.logAgentAction(businessId, {
       agent: "followup",

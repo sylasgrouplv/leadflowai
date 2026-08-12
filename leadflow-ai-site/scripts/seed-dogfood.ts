@@ -51,13 +51,16 @@ const HOURS = {
   sunday: { open: "00:00", close: "00:00", closed: true },
 };
 
-/** The internal sales follow-up cadence (day 1 intro / day 3 value / day 7
- *  case study / day 14 close) expressed in the follow-up config schema. */
+/** The internal sales follow-up cadence (day 1 SMS intro / day 3 value prop /
+ *  day 7 proof / day 14 direct CTA) expressed in the follow-up config schema.
+ *  templateKeys use the `sales_<n>` family (followups/engine.ts) so the
+ *  dogfood tenant sends the SALES cadence, not the generic customer sequence
+ *  (which stays on `seq_<n>` for other tenants). */
 export const DOGFOOD_FOLLOWUP_STEPS: repo.FollowUpStepConfig[] = [
-  { step: 1, days: 1, type: "sms", enabled: true, templateKey: "seq_1" },
-  { step: 2, days: 3, type: "email", enabled: true, templateKey: "seq_2" },
-  { step: 3, days: 7, type: "email", enabled: true, templateKey: "seq_3" },
-  { step: 4, days: 14, type: "email", enabled: true, templateKey: "seq_4" },
+  { step: 1, days: 1, type: "sms", enabled: true, templateKey: "sales_1" },
+  { step: 2, days: 3, type: "email", enabled: true, templateKey: "sales_2" },
+  { step: 3, days: 7, type: "email", enabled: true, templateKey: "sales_3" },
+  { step: 4, days: 14, type: "email", enabled: true, templateKey: "sales_4" },
 ];
 
 export const DOGFOOD_SERVICES = [

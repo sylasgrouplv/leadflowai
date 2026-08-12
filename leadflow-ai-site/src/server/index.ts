@@ -21,6 +21,7 @@ import { healthRoutes } from "./routes/health";
 import { analyticsRoutes } from "./routes/analytics";
 import { reviewRoutes } from "./routes/reviews";
 import { reportRoutes } from "./routes/reports";
+import { importRoutes } from "./routes/import";
 import { HttpError } from "./auth/guards";
 import { runMigrations } from "./db/migrate";
 import { runAutomationEngine } from "./automations/engine";
@@ -89,6 +90,7 @@ export async function createApp() {
   app.route("/api/analytics", analyticsRoutes);
   app.route("/api/reviews", reviewRoutes);
   app.route("/api/reports", reportRoutes);
+  app.route("/api/import", importRoutes);
 
   app.notFound((c) => c.json({ error: "Not found" }, 404));
 
