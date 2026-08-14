@@ -77,6 +77,9 @@ async function wipeBusiness(id: string) {
   await db.delete(s.businesses).where(eq(s.businesses.id, id)).execute();
   for (const m of members) {
     await db.delete(s.sessions).where(eq(s.sessions.userId, m.userId)).execute();
+    const stillOwned = (await db.select({ n: s.businesses.id }).from(s.businesses).where(eq(s.businesses.ownerId, m.userId)).limit(1).execute()).length > 0;
+    const stillMember = (await db.select({ n: s.teamMembers.userId }).from(s.teamMembers).where(eq(s.teamMembers.userId, m.userId)).limit(1).execute()).length > 0;
+    if (stillOwned || stillMember) continue; // shared owner (T3 biz2) — leave the user for the last wipe
     await db.delete(s.users).where(eq(s.users.id, m.userId)).execute();
   }
 }
@@ -89,7 +92,7 @@ const DAY = 24 * HOUR;
   const owner = await repo.createUser({ name: "Invoice Test Owner", email: `invoice-owner-${stamp}@test.local`, passwordHash: "$2b$10$test", role: "owner" });
   const business = await repo.createBusiness({ ownerId: owner.id, name: "Invoice Test Co", category: "home_services" });
   const bizId = business.id;
-  const ctx: ToolContext = { businessId: bizId, agent: "invoice-test", input: {} };
+  const ctx: ToolContext = { businessId: bizId, agent: "invoice-test" };
 
   // ------------------------------------------------------------ T1 rule
   await ensureDogfoodRules(bizId);
@@ -133,7 +136,7 @@ const DAY = 24 * HOUR;
     crossRejected = true;
   }
   pass("T3a same-tenant schedule accepted", !crossRejected, "");
-  const crossCtx: ToolContext = { businessId: biz2.id, agent: "invoice-test", input: {} };
+  const crossCtx: ToolContext = { businessId: biz2.id, agent: "invoice-test" };
   let crossFail = false;
   try {
     await callAiTool("schedule_invoice_reminder", crossCtx, { invoice_id: created.id });
@@ -200,7 +203,7 @@ const DAY = 24 * HOUR;
   // ------------------------------------------------------------ T9 opt-out
   await repo.createLead({ businessId: bizId, firstName: "Opt", lastName: "Out", phone: "", email: "optout@example.test", source: "invoice", serviceRequested: "" });
   const optLead = (await repo.listLeads(bizId, 1000)).find((l) => l.email === "optout@example.test");
-  await repo.setLeadOptedOut(bizId, optLead!.id, "invoice");
+  await repo.updateLead(bizId, optLead!.id, { optedOut: 1 });
   const inv4 = (await callAiTool("create_invoice", ctx, { customer_name: "Opt Out", customer_email: "optout@example.test", amount_cents: 10000, due_at: repo.now() + 5 * DAY })) as { id: string };
   await runAutomationEngine(bizId);
   const fups4 = await repo.listFollowUpsWithLead(bizId, 500);
@@ -217,15 +220,18 @@ const DAY = 24 * HOUR;
   pass("T10e no manufactured urgency", !/action required|urgent|final notice/i.test(email.subject + email.html), email.subject);
 
   // ------------------------------------------------------------ T11 stop rules exempt
-  const invoiceLead = fups.find(({ followUp }) => followUp.id === fup!.id)!.lead;
+  const invoiceLead = fups.find(({ followUp }) => followUp.id === fup!.id)!.lead!;
   const before = await repo.listFollowUpsWithLead(bizId, 500);
   await repo.cancelFollowUpsForLead(bizId, invoiceLead.id); // generic stop rule (e.g. booking) fires
   const after11 = await repo.listFollowUpsWithLead(bizId, 500);
   const survivors = after11.filter(({ followUp }) => followUp.id === fup!.id);
   pass("T11 invoice reminder survives generic stop rules", survivors.length === 1 && survivors[0].followUp.status === "sent", survivors[0]?.followUp.status ?? "gone");
 
-  await wipeBusiness(bizId);
+  // Wipe the second business first, then the main one — both share the owner
+  // user, and businesses.ownerId → users.id has no ON DELETE, so the user is
+  // only deleted once no business/team row references them anymore.
   await wipeBusiness(biz2.id);
+  await wipeBusiness(bizId);
   console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} FAILURES`} — invoice-test`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch((e) => {
