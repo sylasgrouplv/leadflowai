@@ -24,6 +24,11 @@
  *                            from business creation; each reminder re-checks
  *                            at fire time that its step is still incomplete
  *                            and cancels itself once the step is done)
+ *   7. HUMAN_ESCALATION      → categorize_human_task (dogfooding Phase 2 —
+ *                            Chunk F: every human escalation task is
+ *                            categorized billing / technical / emergency /
+ *                            complaint / other by a deterministic classifier
+ *                            and the owner is notified with the category)
  *
  * `ensureDefaultRulesForBusiness` is NAME-based (not count-based): businesses
  * that predate a new default rule pick it up on the next scheduler tick
@@ -32,7 +37,7 @@
  */
 import * as repo from "../db/repo";
 
-export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder", "onboarding_reminders"] as const;
+export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder", "onboarding_reminders", "support_ticket_categorization"] as const;
 export type DefaultRuleName = (typeof DEFAULT_RULE_NAMES)[number];
 
 export interface DefaultRuleSpec {
@@ -102,6 +107,17 @@ export const DEFAULT_RULES: DefaultRuleSpec[] = [
     condition: { type: "none" },
     action: "schedule_onboarding_reminders",
     actionConfig: { delay_days: { "1": 1, "2": 3, "3": 7, "4": 14 } },
+  },
+  {
+    name: "support_ticket_categorization",
+    triggerEvent: "HUMAN_ESCALATION",
+    // delayMs 0: the task is categorized immediately (deterministic keyword
+    // classifier over reason + conversation summary + recommended action) and
+    // the owner is notified with the category — Phase 2 / Chunk F.
+    delayMs: 0,
+    condition: { type: "none" },
+    action: "categorize_human_task",
+    actionConfig: {},
   },
 ];
 

@@ -233,6 +233,16 @@ export async function runAutomationEngine(nowMs = Date.now()): Promise<EngineRun
         const appointmentId = payload.appointmentId ?? payload.appointment_id ?? cfg.appointment_id ?? cfg.appointmentId ?? "";
         actionConfig = { ...cfg, appointment_id: appointmentId };
       }
+      // Support task categorization (Phase 2 — Chunk F): the human task id
+      // lives in the HUMAN_ESCALATION event payload captured on the run
+      // (createHumanTaskRecord emits { taskId, priority, reason }) — forward
+      // it so the categorize_human_task action can call the tool.
+      if (action === "categorize_human_task") {
+        const payload = safeJson(run.payloadJson, {}) as Record<string, unknown>;
+        const cfg = (actionConfig ?? {}) as Record<string, unknown>;
+        const taskId = payload.taskId ?? payload.task_id ?? cfg.human_task_id ?? cfg.taskId ?? "";
+        actionConfig = { ...cfg, human_task_id: taskId };
+      }
 
       const res = await executeAction({ businessId: run.businessId, leadId: run.leadId, action, actionConfig });
       if (res.ok) {

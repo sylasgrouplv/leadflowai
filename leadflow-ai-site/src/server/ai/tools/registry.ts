@@ -31,6 +31,7 @@ import { startSequence, stopSequence, optOutLead, sendFollowUpRow } from "../../
 import { requestReview, recordFeedback } from "../../reviews/agent";
 import { scheduleAppointmentReminder } from "../../reminders/agent";
 import { scheduleOnboardingReminders } from "../../onboarding/agent";
+import { categorizeHumanTask } from "../../support/agent";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
@@ -532,6 +533,17 @@ export const TOOL_REGISTRY: ToolDef[] = [
     inputSchema: z.object({}),
     validate: async (ctx) => (await repo.getBusinessById(ctx.businessId)) ? null : `business ${ctx.businessId} not found`,
     handler: async (ctx) => scheduleOnboardingReminders(ctx.businessId),
+    audit: true,
+  },
+  {
+    name: "categorize_human_task",
+    description:
+      "Categorize a human escalation task (billing / technical / emergency / complaint / other) with a deterministic keyword classifier over its reason + conversation summary + recommended action, and notify the business owner with the category (Phase 2 / Chunk F — support ticket categorization; fired by the support_ticket_categorization default rule on HUMAN_ESCALATION).",
+    permissionLevel: "WRITE",
+    inputSchema: z.object({ human_task_id: uuid("human_task_id") }),
+    validate: async (ctx, input) =>
+      (await repo.getHumanTaskById(ctx.businessId, input.human_task_id)) ? null : `human task ${input.human_task_id} does not belong to business ${ctx.businessId}`,
+    handler: async (ctx, input) => categorizeHumanTask(ctx.businessId, input.human_task_id),
     audit: true,
   },
   {

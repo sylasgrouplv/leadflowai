@@ -384,6 +384,7 @@ export const humanTasks = sqliteTable("human_tasks", {
   reason: text("reason").notNull(),
   conversationSummary: text("conversation_summary").default(""),
   recommendedAction: text("recommended_action").default(""),
+  category: text("category").notNull().default("other"),
   status: text("status").$type<HumanTaskStatus>().notNull().default("open"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
