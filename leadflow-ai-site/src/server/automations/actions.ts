@@ -14,6 +14,10 @@
  *   send_message            → send_message (custom rules)
  *   send_review_request     → send_review_request (Review Agent, spec §21 —
  *                             post-completed-job feedback request)
+ *   schedule_appointment_reminder → schedule_appointment_reminder (Phase 1b —
+ *                             reminder at appointment start − lead time)
+ *   schedule_onboarding_reminders → schedule_onboarding_reminders (Phase 2 —
+ *                             setup-step reminders for a new business)
  */
 import * as repo from "../db/repo";
 import { callAiTool, type ToolContext } from "../ai/tools/registry";
@@ -124,6 +128,15 @@ export async function executeAction(opts: {
         const appointmentId = typeof config.appointment_id === "string" ? config.appointment_id : null;
         if (!appointmentId) return { ok: false, error: "no-appointmentId-in-config" };
         const res = await callAiTool("schedule_appointment_reminder", ctx, { appointment_id: appointmentId });
+        return { ok: true, result: res };
+      }
+
+      case "schedule_onboarding_reminders": {
+        // BUSINESS_CREATED → schedule the business's setup-step reminders
+        // (knowledge base / calendar / services / widget at day 1/3/7/14 from
+        // business creation). No input needed — everything comes from the
+        // tool's tenant context; idempotent per business.
+        const res = await callAiTool("schedule_onboarding_reminders", ctx, {});
         return { ok: true, result: res };
       }
 

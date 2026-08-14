@@ -17,6 +17,13 @@
  *                            start minus the business's lead time, default
  *                            120 minutes; re-checks the appointment at fire
  *                            time; never reminds cancelled/rescheduled ones)
+ *   6. BUSINESS_CREATED      → schedule_onboarding_reminders (dogfooding
+ *                            Phase 2 — Chunk E: every new tenant gets a
+ *                            setup-step reminder sequence — knowledge base /
+ *                            calendar / services / widget — at day 1/3/7/14
+ *                            from business creation; each reminder re-checks
+ *                            at fire time that its step is still incomplete
+ *                            and cancels itself once the step is done)
  *
  * `ensureDefaultRulesForBusiness` is NAME-based (not count-based): businesses
  * that predate a new default rule pick it up on the next scheduler tick
@@ -25,7 +32,7 @@
  */
 import * as repo from "../db/repo";
 
-export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder"] as const;
+export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder", "onboarding_reminders"] as const;
 export type DefaultRuleName = (typeof DEFAULT_RULE_NAMES)[number];
 
 export interface DefaultRuleSpec {
@@ -84,6 +91,17 @@ export const DEFAULT_RULES: DefaultRuleSpec[] = [
     condition: { type: "none" },
     action: "schedule_appointment_reminder",
     actionConfig: { reminder_minutes: 120 },
+  },
+  {
+    name: "onboarding_reminders",
+    triggerEvent: "BUSINESS_CREATED",
+    // delayMs 0: the action computes each reminder's offset from the business's
+    // createdAt (day 1 / 3 / 7 / 14 — per-business delays in this rule's
+    // actionConfig `delay_days`; config-only, no schema change).
+    delayMs: 0,
+    condition: { type: "none" },
+    action: "schedule_onboarding_reminders",
+    actionConfig: { delay_days: { "1": 1, "2": 3, "3": 7, "4": 14 } },
   },
 ];
 

@@ -440,6 +440,7 @@ export const EVENTS = [
   "CUSTOMER_OPTED_OUT",
   "HUMAN_ESCALATION",
   "REVIEW_REQUESTED",
+  "BUSINESS_CREATED",
 ] as const;
 export type EventType = (typeof EVENTS)[number];
 

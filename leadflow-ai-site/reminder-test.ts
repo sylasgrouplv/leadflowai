@@ -4,7 +4,7 @@
  *
  * Exercises:
  *   T1  default `appointment_reminder` rule materializes for new tenants
- *       (via the dogfood seed path ensureDogfoodRules — 5 default rules)
+ *       (via the dogfood seed path ensureDogfoodRules — 6 default rules)
  *   T2  APPOINTMENT_BOOKED → engine → reminder follow-up row + run scheduled
  *       at (appointment start − lead time, default 120 minutes)
  *   T3  re-emitted APPOINTMENT_BOOKED is idempotent (no duplicate reminder)
@@ -109,7 +109,7 @@ const DAY = 24 * HOUR;
   const svcId = service.id;
 
   // ------------------------------------------------------------ T1 rule
-  await ensureDogfoodRules(bizId); // the dogfood seed path (5 default rules)
+  await ensureDogfoodRules(bizId); // the dogfood seed path (6 default rules)
   const rules = await repo.listAutomationRules(bizId);
   const reminderRule = rules.find((r) => r.name === "appointment_reminder");
   pass(
@@ -117,7 +117,7 @@ const DAY = 24 * HOUR;
     !!reminderRule && reminderRule.triggerEvent === "APPOINTMENT_BOOKED" && reminderRule.action === "schedule_appointment_reminder" && reminderRule.conditionJson.includes("none"),
     reminderRule ? `${reminderRule.triggerEvent}→${reminderRule.action} delay=${reminderRule.delayMs}` : "missing"
   );
-  pass("T1b five default rules (dogfood)", rules.length === 5, `n=${rules.length}`);
+  pass("T1b six default rules (dogfood)", rules.length === 6, `n=${rules.length}`);
   const cfg = reminderRule?.actionConfigJson ? (JSON.parse(reminderRule.actionConfigJson) as { reminder_minutes?: number }) : {};
   pass("T1c default lead time 120 in rule actionConfig", cfg.reminder_minutes === 120, JSON.stringify(cfg));
 

@@ -30,6 +30,7 @@ import { createFollowUpStepRun } from "../automations/runs";
 import { recordSmsUsage } from "../usage/record";
 import { isAgentEnabled } from "../platform/settings";
 import { REMINDER_TEMPLATE_KEY, sendAppointmentReminder } from "../reminders/agent";
+import { onboardingStepOf, sendOnboardingReminder } from "../onboarding/agent";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -45,6 +46,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Appointment reminders (`appointment_reminder` — Phase 1b) are a third
 // family, delegated to the Reminder Agent (src/server/reminders/agent.ts) for
 // their send path; they flow through this engine's ONE send entry point.
+// Onboarding setup-step reminders (`onboarding_step_<n>` — Phase 2 / Chunk E)
+// are a fourth family, delegated to the Onboarding Agent
+// (src/server/onboarding/agent.ts), also through the ONE send entry point.
 // ---------------------------------------------------------------------------
 
 function leadName(lead: { firstName: string; lastName: string | null }): string {
@@ -271,6 +275,24 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
       }
     }
     return sendAppointmentReminder(businessId, f, lead, payload);
+  }
+  // Onboarding setup-step reminders (Phase 2 — Chunk E): the onboarding branch
+  // also runs BEFORE the generic stop rules — these rows exist BECAUSE the
+  // business was just created, so stop rules that cancel a lead's follow-ups
+  // must not kill them. The Onboarding Agent re-checks the step is still
+  // incomplete at fire time and cancels itself silently once the step is done
+  // (the setup_step_completed check on the run), so completed steps never send.
+  if (onboardingStepOf(f.templateKey) !== null) {
+    const run = await repo.getRunForFollowUp(f.id);
+    let payload: Record<string, unknown> = {};
+    if (run) {
+      try {
+        payload = JSON.parse(run.payloadJson || "{}");
+      } catch {
+        /* unparsable — the reminder send will cancel (no step) */
+      }
+    }
+    return sendOnboardingReminder(businessId, f, lead, payload);
   }
   // Stop rules evaluated at send time (safety over schedule).
   if (lead.optedOut === 1 || ["appointment_booked", "customer"].includes(lead.status)) {

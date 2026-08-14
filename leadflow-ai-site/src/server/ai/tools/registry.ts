@@ -30,6 +30,7 @@ import { checkCalendarAction, bookAppointmentAction, updateAppointmentStatusActi
 import { startSequence, stopSequence, optOutLead, sendFollowUpRow } from "../../followups/engine";
 import { requestReview, recordFeedback } from "../../reviews/agent";
 import { scheduleAppointmentReminder } from "../../reminders/agent";
+import { scheduleOnboardingReminders } from "../../onboarding/agent";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
@@ -521,6 +522,16 @@ export const TOOL_REGISTRY: ToolDef[] = [
     validate: async (ctx, input) =>
       (await repo.getAppointmentById(ctx.businessId, input.appointment_id)) ? null : `appointment ${input.appointment_id} does not belong to business ${ctx.businessId}`,
     handler: async (ctx, input) => scheduleAppointmentReminder(ctx.businessId, input.appointment_id),
+    audit: true,
+  },
+  {
+    name: "schedule_onboarding_reminders",
+    description:
+      "Schedule a new business's onboarding setup-step reminders (templateKey onboarding_step_1..4 — knowledge base / calendar / services / widget) on the automation engine when a business is created (Phase 2 / Chunk E). One follow-up row + run per step at day 1/3/7/14 from business creation (per-business delays from the rule actionConfig). Idempotent per business; each reminder re-checks at fire time that its step is still incomplete and cancels itself once the step is done.",
+    permissionLevel: "WRITE",
+    inputSchema: z.object({}),
+    validate: async (ctx) => (await repo.getBusinessById(ctx.businessId)) ? null : `business ${ctx.businessId} not found`,
+    handler: async (ctx) => scheduleOnboardingReminders(ctx.businessId),
     audit: true,
   },
   {

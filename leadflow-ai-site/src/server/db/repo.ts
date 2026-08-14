@@ -807,7 +807,11 @@ export async function listDueFollowUps(limit = 100, nowMs = now()) {
  *  Appointment-reminder rows (Phase 1b, templateKey "appointment_reminder")
  *  are EXCLUDED: the Reminder Agent owns them and re-checks the appointment at
  *  fire time, so a booked lead's reminder must survive the booking stop-rule
- *  (it cancels itself for cancelled/rescheduled appointments). */
+ *  (it cancels itself for cancelled/rescheduled appointments).
+ *  Onboarding setup-step rows (Phase 2, templateKey "onboarding_step_<n>") are
+ *  EXCLUDED the same way: the Onboarding Agent owns them and re-checks the
+ *  step is still incomplete at fire time, so generic stop rules must not kill
+ *  a new business's setup reminders (completed steps cancel themselves). */
 export async function cancelFollowUpsForLead(businessId: string, leadId: string, opts: { keep?: string[] } = {}) {
   const db = getDb();
   const rows = await db
@@ -817,13 +821,34 @@ export async function cancelFollowUpsForLead(businessId: string, leadId: string,
     .execute();
   let cancelled = 0;
   for (const r of rows) {
-    if (opts.keep?.includes(r.templateKey ?? "") || r.templateKey === "appointment_reminder") continue;
+    if (opts.keep?.includes(r.templateKey ?? "") || r.templateKey === "appointment_reminder" || (r.templateKey ?? "").startsWith("onboarding_step_")) continue;
     await db.update(s.followUps).set({ status: "cancelled", updatedAt: now() }).where(eq(s.followUps.id, r.id)).execute();
     cancelled += 1;
     const run = await getRunForFollowUp(r.id);
     if (run && ["pending", "running"].includes(run.status)) {
       await db.update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, run.id)).execute();
     }
+  }
+  // Also cancel any remaining runs for this lead that are NOT backed by an
+  // excluded follow-up row — e.g. the sequence-start run materialized on
+  // LEAD_QUALIFIED (ruleKind "qualified_followup_sequence", no followUpId).
+  // Reminder/onboarding runs survive: they are linked to an excluded row via
+  // their payload followUpId, so we resolve the row's templateKey and skip it.
+  const runs = await db
+    .select()
+    .from(s.automationRuns)
+    .where(and(eq(s.automationRuns.businessId, businessId), eq(s.automationRuns.leadId, leadId), inArray(s.automationRuns.status, ["pending", "running"])))
+    .execute();
+  for (const r of runs) {
+    let templateKey: string | null = null;
+    try {
+      const p = JSON.parse(r.payloadJson || "{}");
+      if (typeof p.followUpId === "string") templateKey = (await getFollowUpById(businessId, p.followUpId))?.templateKey ?? null;
+    } catch {
+      /* unparsable payload — treat as orphaned (cancel) */
+    }
+    if (templateKey === "appointment_reminder" || (templateKey ?? "").startsWith("onboarding_step_") || (opts.keep ?? []).includes(templateKey ?? "")) continue;
+    await db.update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, r.id)).execute();
   }
   return cancelled;
 }
