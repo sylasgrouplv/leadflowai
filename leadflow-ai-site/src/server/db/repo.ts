@@ -1843,16 +1843,35 @@ export async function listReviews(businessId: string, limit = 100): Promise<Revi
 }
 
 // ---------------------------------------------------------------------------
-// AI BRAIN 4 — weekly business intelligence reports (spec §22)
+// AI BRAIN 4 — business intelligence reports (spec §22) + daily ops reports
+// (dogfooding #9, Chunk G). Shared storage: business_reports with a `type`
+// discriminator ('weekly' default / 'daily'). week_start holds the period
+// start (Monday 00:00 UTC for weekly, midnight UTC for daily).
 // ---------------------------------------------------------------------------
 
+export const WEEKLY_REPORT_TYPE = "weekly";
+export const DAILY_REPORT_TYPE = "daily";
+
 export async function getWeeklyReport(businessId: string, weekStart: number) {
-  const rows = await getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.weekStart, weekStart))).execute();
+  const rows = await getDb()
+    .select()
+    .from(s.businessReports)
+    .where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.type, WEEKLY_REPORT_TYPE), eq(s.businessReports.weekStart, weekStart)))
+    .execute();
+  return rows[0] ?? null;
+}
+
+export async function getDailyReport(businessId: string, dayStart: number) {
+  const rows = await getDb()
+    .select()
+    .from(s.businessReports)
+    .where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.type, DAILY_REPORT_TYPE), eq(s.businessReports.weekStart, dayStart)))
+    .execute();
   return rows[0] ?? null;
 }
 
 export async function getWeeklyReportById(businessId: string, id: string) {
-  const rows = await getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.id, id))).execute();
+  const rows = await getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.id, id), eq(s.businessReports.type, WEEKLY_REPORT_TYPE))).execute();
   return rows[0] ?? null;
 }
 
@@ -1860,7 +1879,17 @@ export async function listWeeklyReports(businessId: string, limit = 12) {
   return await getDb()
     .select()
     .from(s.businessReports)
-    .where(eq(s.businessReports.businessId, businessId))
+    .where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.type, WEEKLY_REPORT_TYPE)))
+    .orderBy(desc(s.businessReports.weekStart))
+    .limit(limit)
+    .execute();
+}
+
+export async function listDailyReports(businessId: string, limit = 12) {
+  return await getDb()
+    .select()
+    .from(s.businessReports)
+    .where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.type, DAILY_REPORT_TYPE)))
     .orderBy(desc(s.businessReports.weekStart))
     .limit(limit)
     .execute();
@@ -1881,9 +1910,30 @@ export async function upsertWeeklyReport(businessId: string, weekStart: number, 
   }
   await getDb()
     .insert(s.businessReports)
-    .values({ id: newId(), businessId, weekStart, metricsJson: JSON.stringify(metrics), narrativeJson: JSON.stringify(narrative), createdAt: t })
+    .values({ id: newId(), businessId, type: WEEKLY_REPORT_TYPE, weekStart, metricsJson: JSON.stringify(metrics), narrativeJson: JSON.stringify(narrative), createdAt: t })
     .execute();
   return getWeeklyReport(businessId, weekStart)!;
+}
+
+/** Upsert a daily ops report for a business+day (idempotent — regenerating a
+ *  day replaces the stored report; the (business_id, type, week_start) unique
+ *  index guarantees one row per business+day). */
+export async function upsertDailyReport(businessId: string, dayStart: number, metrics: unknown, narrative: unknown) {
+  const t = now();
+  const existing = await getDailyReport(businessId, dayStart);
+  if (existing) {
+    await getDb()
+      .update(s.businessReports)
+      .set({ metricsJson: JSON.stringify(metrics), narrativeJson: JSON.stringify(narrative), createdAt: t })
+      .where(eq(s.businessReports.id, existing.id))
+      .execute();
+    return getDailyReport(businessId, dayStart)!;
+  }
+  await getDb()
+    .insert(s.businessReports)
+    .values({ id: newId(), businessId, type: DAILY_REPORT_TYPE, weekStart: dayStart, metricsJson: JSON.stringify(metrics), narrativeJson: JSON.stringify(narrative), createdAt: t })
+    .execute();
+  return getDailyReport(businessId, dayStart)!;
 }
 
 // ---------------------------------------------------------------------------
@@ -1928,6 +1978,54 @@ export async function listFollowUpsBetween(businessId: string, start: number, en
     .select()
     .from(s.followUps)
     .where(and(eq(s.followUps.businessId, businessId), gte(s.followUps.scheduledFor, start), sql`${s.followUps.scheduledFor} < ${end}`))
+    .execute();
+}
+
+// ---------------------------------------------------------------------------
+// Prospect-scoped reads (daily ops report — dogfooding #9 / Chunk G).
+// Bounded by an explicit lead-id set so the report scans only the campaign's
+// rows, never the whole business. All-time (0, now) is intentional: the daily
+// report mixes one day's numbers with campaign totals-to-date.
+// ---------------------------------------------------------------------------
+
+/** Appointments whose lead is in `leadIds` (all time). */
+export async function listAppointmentsByLeadIds(businessId: string, leadIds: string[]) {
+  if (!leadIds.length) return [];
+  return await getDb()
+    .select()
+    .from(s.appointments)
+    .where(and(eq(s.appointments.businessId, businessId), inArray(s.appointments.leadId, leadIds)))
+    .execute();
+}
+
+/** Follow-ups whose lead is in `leadIds` (all time). */
+export async function listFollowUpsByLeadIds(businessId: string, leadIds: string[]) {
+  if (!leadIds.length) return [];
+  return await getDb()
+    .select()
+    .from(s.followUps)
+    .where(and(eq(s.followUps.businessId, businessId), inArray(s.followUps.leadId, leadIds)))
+    .execute();
+}
+
+/** Conversations whose lead is in `leadIds` (all time). */
+export async function listConversationsByLeadIds(businessId: string, leadIds: string[]) {
+  if (!leadIds.length) return [];
+  return await getDb()
+    .select()
+    .from(s.conversations)
+    .where(and(eq(s.conversations.businessId, businessId), inArray(s.conversations.leadId, leadIds)))
+    .execute();
+}
+
+/** Messages in the given conversations within [start, end). */
+export async function listMessagesForConversations(businessId: string, conversationIds: string[], start: number, end: number) {
+  if (!conversationIds.length) return [];
+  return await getDb()
+    .select()
+    .from(s.messages)
+    .where(and(eq(s.messages.businessId, businessId), inArray(s.messages.conversationId, conversationIds), gte(s.messages.createdAt, start), sql`${s.messages.createdAt} < ${end}`))
+    .orderBy(asc(s.messages.createdAt))
     .execute();
 }
 
@@ -2041,3 +2139,8 @@ export async function listFailedAutomationRuns(limit = 50, sinceMs?: number) {
 }
 
 export type { SQL };
+
+export async function getDailyReportById(businessId: string, id: string) {
+  const rows = await getDb().select().from(s.businessReports).where(and(eq(s.businessReports.businessId, businessId), eq(s.businessReports.id, id), eq(s.businessReports.type, DAILY_REPORT_TYPE))).execute();
+  return rows[0] ?? null;
+}
