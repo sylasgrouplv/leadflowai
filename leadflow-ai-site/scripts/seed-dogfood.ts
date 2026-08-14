@@ -196,14 +196,18 @@ export async function seedDogfood() {
  * Phase 1b: verifies the appointment_reminder rule (APPOINTMENT_BOOKED →
  * schedule_appointment_reminder) is present — existing tenants pick it up on
  * the next seed run / scheduler tick without touching their other rules.
+ * Phase 2 / Chunk H: also verifies the invoice_reminder rule
+ * (INVOICE_CREATED → schedule_invoice_reminder, lead_hours 48).
  */
 export async function ensureDogfoodRules(businessId: string): Promise<boolean> {
   const created = await ensureDefaultRulesForBusiness(businessId);
   const rules = await repo.listAutomationRules(businessId);
   const reminder = rules.find((r) => r.name === "appointment_reminder");
   if (!reminder) throw new Error(`[seed-dogfood] appointment_reminder rule missing for ${businessId}`);
+  const invoice = rules.find((r) => r.name === "invoice_reminder");
+  if (!invoice) throw new Error(`[seed-dogfood] invoice_reminder rule missing for ${businessId}`);
   console.log(
-    `[seed-dogfood] rules: ${rules.map((r) => r.name).sort().join(", ")} · appointment_reminder=${reminder.action} delayMs=${reminder.delayMs}`
+    `[seed-dogfood] rules: ${rules.map((r) => r.name).sort().join(", ")} · appointment_reminder=${reminder.action} delayMs=${reminder.delayMs} · invoice_reminder=${invoice.action} lead_hours=${(JSON.parse(invoice.actionConfigJson || "{}") as { lead_hours?: number }).lead_hours ?? 48}`
   );
   return created;
 }

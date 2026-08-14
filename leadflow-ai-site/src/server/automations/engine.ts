@@ -243,6 +243,17 @@ export async function runAutomationEngine(nowMs = Date.now()): Promise<EngineRun
         const taskId = payload.taskId ?? payload.task_id ?? cfg.human_task_id ?? cfg.taskId ?? "";
         actionConfig = { ...cfg, human_task_id: taskId };
       }
+      // Invoice reminders (Phase 2 — Chunk H): the invoice id lives in the
+      // INVOICE_CREATED event payload captured on the run (create_invoice
+      // emits { invoiceId, businessId, dueAt, amountCents, customerEmail }) —
+      // forward it so the schedule_invoice_reminder action can schedule the
+      // reminder (idempotent; re-checked at send time).
+      if (action === "schedule_invoice_reminder") {
+        const payload = safeJson(run.payloadJson, {}) as Record<string, unknown>;
+        const cfg = (actionConfig ?? {}) as Record<string, unknown>;
+        const invoiceId = payload.invoiceId ?? payload.invoice_id ?? cfg.invoice_id ?? cfg.invoiceId ?? "";
+        actionConfig = { ...cfg, invoice_id: invoiceId };
+      }
 
       const res = await executeAction({ businessId: run.businessId, leadId: run.leadId, action, actionConfig });
       if (res.ok) {

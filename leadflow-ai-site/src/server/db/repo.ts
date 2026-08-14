@@ -811,7 +811,11 @@ export async function listDueFollowUps(limit = 100, nowMs = now()) {
  *  Onboarding setup-step rows (Phase 2, templateKey "onboarding_step_<n>") are
  *  EXCLUDED the same way: the Onboarding Agent owns them and re-checks the
  *  step is still incomplete at fire time, so generic stop rules must not kill
- *  a new business's setup reminders (completed steps cancel themselves). */
+ *  a new business's setup reminders (completed steps cancel themselves).
+ *  Invoice-reminder rows (Phase 2 / Chunk H, templateKey "invoice_reminder")
+ *  are EXCLUDED the same way: the Invoice Agent owns them and re-checks the
+ *  invoice is still unpaid at fire time, so a customer lead's invoice reminder
+ *  survives generic stop rules (markInvoicePaid/Cancelled cancels it). */
 export async function cancelFollowUpsForLead(businessId: string, leadId: string, opts: { keep?: string[] } = {}) {
   const db = getDb();
   const rows = await db
@@ -821,7 +825,7 @@ export async function cancelFollowUpsForLead(businessId: string, leadId: string,
     .execute();
   let cancelled = 0;
   for (const r of rows) {
-    if (opts.keep?.includes(r.templateKey ?? "") || r.templateKey === "appointment_reminder" || (r.templateKey ?? "").startsWith("onboarding_step_")) continue;
+    if (opts.keep?.includes(r.templateKey ?? "") || r.templateKey === "appointment_reminder" || (r.templateKey ?? "").startsWith("onboarding_step_") || r.templateKey === "invoice_reminder") continue;
     await db.update(s.followUps).set({ status: "cancelled", updatedAt: now() }).where(eq(s.followUps.id, r.id)).execute();
     cancelled += 1;
     const run = await getRunForFollowUp(r.id);
@@ -847,7 +851,7 @@ export async function cancelFollowUpsForLead(businessId: string, leadId: string,
     } catch {
       /* unparsable payload — treat as orphaned (cancel) */
     }
-    if (templateKey === "appointment_reminder" || (templateKey ?? "").startsWith("onboarding_step_") || (opts.keep ?? []).includes(templateKey ?? "")) continue;
+    if (templateKey === "appointment_reminder" || (templateKey ?? "").startsWith("onboarding_step_") || templateKey === "invoice_reminder" || (opts.keep ?? []).includes(templateKey ?? "")) continue;
     await db.update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, r.id)).execute();
   }
   return cancelled;
@@ -1158,6 +1162,101 @@ export async function updateHumanTaskCategory(businessId: string, id: string, ca
     .where(and(eq(s.humanTasks.id, id), eq(s.humanTasks.businessId, businessId)))
     .execute();
   return getHumanTaskById(businessId, id);
+}
+// ---------------------------------------------------------------------------
+// Invoices (dogfooding Phase 2 / Chunk H — invoice reminders, automation #10)
+// ---------------------------------------------------------------------------
+
+export interface NewInvoice {
+  customerName: string;
+  customerEmail: string;
+  amountCents: number;
+  dueAt: number;
+  status?: (typeof s.INVOICE_STATUSES)[number];
+}
+
+/** Create an invoice row (tenant-scoped). The `create_invoice` tool is the ONLY app path here — it also emits INVOICE_CREATED. */
+export async function createInvoice(businessId: string, data: NewInvoice) {
+  const t = now();
+  const id = newId();
+  await getDb()
+    .insert(s.invoices)
+    .values({
+      id,
+      businessId,
+      customerName: data.customerName,
+      customerEmail: data.customerEmail,
+      amountCents: data.amountCents,
+      dueAt: data.dueAt,
+      status: data.status ?? "unpaid",
+      createdAt: t,
+      updatedAt: t,
+    })
+    .execute();
+  return getInvoiceById(businessId, id);
+}
+
+export async function getInvoiceById(businessId: string, id: string) {
+  const rows = await getDb().select().from(s.invoices).where(and(eq(s.invoices.id, id), eq(s.invoices.businessId, businessId))).execute();
+  return rows[0] ?? null;
+}
+
+export async function listInvoicesByBusiness(businessId: string, limit = 100) {
+  return await getDb().select().from(s.invoices).where(eq(s.invoices.businessId, businessId)).orderBy(asc(s.invoices.dueAt)).limit(limit).execute();
+}
+
+export async function updateInvoice(businessId: string, id: string, patch: Partial<typeof s.invoices.$inferInsert>) {
+  const existing = await getInvoiceById(businessId, id);
+  if (!existing) return null;
+  await getDb().update(s.invoices).set({ ...patch, updatedAt: now() }).where(and(eq(s.invoices.id, id), eq(s.invoices.businessId, businessId))).execute();
+  return getInvoiceById(businessId, id);
+}
+
+/**
+ * Cancel the pending invoice-reminder follow-up row + run for an invoice
+ * (Chunk H). Called when the invoice is marked paid or cancelled so a settled
+ * invoice is NEVER reminded; the send path also re-checks at fire time
+ * (invoiceStillUnpaid) as a second guard.
+ */
+export async function cancelInvoiceReminderFollowUp(businessId: string, invoiceId: string): Promise<number> {
+  const rows = await getDb()
+    .select()
+    .from(s.followUps)
+    .where(and(eq(s.followUps.businessId, businessId), eq(s.followUps.templateKey, "invoice_reminder"), sql`${s.followUps.status} IN ('pending', 'paused')`))
+    .execute();
+  let cancelled = 0;
+  for (const r of rows) {
+    const run = await getRunForFollowUp(r.id);
+    let payload: Record<string, unknown> = {};
+    if (run) {
+      try {
+        payload = JSON.parse(run.payloadJson || "{}");
+      } catch {
+        /* unparsable — treat as matching (cancel) */
+      }
+    }
+    if (payload.invoiceId !== invoiceId) continue;
+    await getDb().update(s.followUps).set({ status: "cancelled", updatedAt: now() }).where(eq(s.followUps.id, r.id)).execute();
+    if (run && ["pending", "running"].includes(run.status)) {
+      await getDb().update(s.automationRuns).set({ status: "cancelled", updatedAt: now() }).where(eq(s.automationRuns.id, run.id)).execute();
+    }
+    cancelled += 1;
+  }
+  return cancelled;
+}
+
+/** Mark an invoice paid (future payment webhook path) and cancel its pending reminder. */
+export async function markInvoicePaid(businessId: string, id: string) {
+  const updated = await updateInvoice(businessId, id, { status: "paid" });
+  if (updated) await cancelInvoiceReminderFollowUp(businessId, id);
+  return updated;
+}
+
+/** Mark an invoice cancelled and cancel its pending reminder. */
+export async function markInvoiceCancelled(businessId: string, id: string) {
+  const updated = await updateInvoice(businessId, id, { status: "cancelled" });
+  if (updated) await cancelInvoiceReminderFollowUp(businessId, id);
+  return updated;
 }
 
 // ---------------------------------------------------------------------------

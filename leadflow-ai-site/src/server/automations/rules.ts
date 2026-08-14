@@ -29,6 +29,12 @@
  *                            categorized billing / technical / emergency /
  *                            complaint / other by a deterministic classifier
  *                            and the owner is notified with the category)
+ *   8. INVOICE_CREATED       → schedule_invoice_reminder (dogfooding Phase 2 —
+ *                            Chunk H: every created invoice gets a reminder
+ *                            at due date minus the business's lead time,
+ *                            default 48 hours; re-checks the invoice is still
+ *                            unpaid at fire time; paid/cancelled invoices are
+ *                            never reminded)
  *
  * `ensureDefaultRulesForBusiness` is NAME-based (not count-based): businesses
  * that predate a new default rule pick it up on the next scheduler tick
@@ -37,7 +43,7 @@
  */
 import * as repo from "../db/repo";
 
-export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder", "onboarding_reminders", "support_ticket_categorization"] as const;
+export const DEFAULT_RULE_NAMES = ["lead_created_welcome", "qualified_followup_sequence", "appointment_confirmation", "job_completed_review", "appointment_reminder", "onboarding_reminders", "support_ticket_categorization", "invoice_reminder"] as const;
 export type DefaultRuleName = (typeof DEFAULT_RULE_NAMES)[number];
 
 export interface DefaultRuleSpec {
@@ -118,6 +124,18 @@ export const DEFAULT_RULES: DefaultRuleSpec[] = [
     condition: { type: "none" },
     action: "categorize_human_task",
     actionConfig: {},
+  },
+  {
+    name: "invoice_reminder",
+    triggerEvent: "INVOICE_CREATED",
+    // delayMs 0: the action computes the reminder offset from the invoice's
+    // due date (due minus `lead_hours`, default 48). Per-business lead time
+    // lives in this rule's actionConfig (config-only, no schema change) — the
+    // same mechanism appointment_reminder uses (`reminder_minutes`).
+    delayMs: 0,
+    condition: { type: "none" },
+    action: "schedule_invoice_reminder",
+    actionConfig: { lead_hours: 48 },
   },
 ];
 

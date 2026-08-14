@@ -123,7 +123,7 @@ const DAY = 24 * 60 * MIN;
     !!obRule && obRule.triggerEvent === "BUSINESS_CREATED" && obRule.action === "schedule_onboarding_reminders" && obRule.conditionJson.includes("none") && obRule.delayMs === 0,
     obRule ? `${obRule.triggerEvent}→${obRule.action} delay=${obRule.delayMs}` : "missing"
   );
-  pass("T1b six default rules (dogfood)", rules.length === 7, `n=${rules.length}`);
+  pass("T1b eight default rules (dogfood)", rules.length === 8, `n=${rules.length}`);
   const obCfg = obRule?.actionConfigJson ? (JSON.parse(obRule.actionConfigJson) as { delay_days?: Record<string, number> }) : {};
   pass("T1c default delay_days 1/3/7/14 in rule actionConfig", JSON.stringify(obCfg.delay_days) === JSON.stringify(ONBOARDING_DEFAULT_DELAY_DAYS), JSON.stringify(obCfg.delay_days));
 

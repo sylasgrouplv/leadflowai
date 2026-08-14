@@ -98,7 +98,7 @@ async function wipeBusiness(id: string) {
     !!catRule && catRule.triggerEvent === "HUMAN_ESCALATION" && catRule.action === "categorize_human_task" && catRule.conditionJson.includes("none") && catRule.delayMs === 0,
     catRule ? `${catRule.triggerEvent}→${catRule.action} delay=${catRule.delayMs}` : "missing"
   );
-  pass("T1b seven default rules (dogfood)", rules.length === 7, `n=${rules.length}`);
+  pass("T1b eight default rules (dogfood)", rules.length === 8, `n=${rules.length}`);
   // ------------------------------------------------------------ T2 classifier
   console.log("\n== classifier unit cases ==");
   pass("T2a billing", classifyTaskCategory("Customer is disputing the amount on their invoice and wants a refund") === "billing", "");

@@ -95,3 +95,36 @@ export async function createOnboardingReminderRun(businessId: string, spec: Onbo
     },
   });
 }
+
+export interface InvoiceReminderRunSpec {
+  leadId: string;
+  followUpId: string;
+  scheduledFor: number;
+  type: string;
+  invoiceId: string;
+  dueAt: number;
+}
+
+/**
+ * Run backing an invoice-reminder follow-up row (dogfooding Phase 2 — Chunk H).
+ * ruleKind "followup_step_send" so the engine's send path and pending-row
+ * pre-check apply; the payload carries the invoice id + due date so the
+ * reminder can re-check the invoice is still unpaid at fire time (paid /
+ * cancelled invoice → cancelled, never sent).
+ */
+export async function createInvoiceReminderRun(businessId: string, spec: InvoiceReminderRunSpec) {
+  return repo.createAutomationRun({
+    businessId,
+    leadId: spec.leadId,
+    ruleKind: "followup_step_send",
+    runAt: spec.scheduledFor,
+    payload: {
+      followUpId: spec.followUpId,
+      step: null,
+      templateKey: "invoice_reminder",
+      type: spec.type,
+      invoiceId: spec.invoiceId,
+      dueAt: spec.dueAt,
+    },
+  });
+}
