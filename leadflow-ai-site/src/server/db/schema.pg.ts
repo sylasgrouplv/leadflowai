@@ -590,22 +590,27 @@ export const usageEvents = pgTable("usage_events", {
 
 
 /**
- * Business Intelligence weekly reports (spec §22): deterministic aggregation
- * of a business's real rows for one week (week_start = Monday 00:00 UTC) plus
- * a mock-LLM narrative (summary / wins / problems / opportunities /
- * recommended actions). Stored so history persists and the Analytics page can
- * list them. week_start is unique per business (one report per week).
+ * Business Intelligence reports (spec §22): deterministic aggregation of a
+ * business's real rows plus a mock-LLM narrative (summary / wins / problems /
+ * opportunities / recommended actions). Stored so history persists and the
+ * Analytics page can list them.
+ *   - type 'weekly' (default): one row per week (week_start = Monday 00:00 UTC).
+ *   - type 'daily'  (dogfooding #9): daily ops report — one row per day
+ *     (week_start holds the day start, midnight UTC; see bi/outreach.ts).
+ * (business_id, type, week_start) is unique per business, so a daily report
+ * for a Monday can coexist with that week's weekly report.
  */
 export const businessReports = pgTable("business_reports", {
   id: text("id").primaryKey(),
   businessId: text("business_id")
     .notNull()
     .references(() => businesses.id, { onDelete: "cascade" }),
+  type: text("type").notNull().default("weekly"),
   weekStart: bigint("week_start", { mode: "number" }).notNull(),
   metricsJson: text("metrics_json").notNull().default("{}"),
   narrativeJson: text("narrative_json").notNull().default("{}"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
-}, (t) => [uniqueIndex("business_reports_biz_week_idx").on(t.businessId, t.weekStart)]);
+}, (t) => [uniqueIndex("business_reports_biz_type_week_idx").on(t.businessId, t.type, t.weekStart)]);
 
 // ---------------------------------------------------------------------------
 // AI BRAIN 5b — platform-level settings (spec §39 admin AI control)

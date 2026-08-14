@@ -28,6 +28,7 @@
  */
 import { runAutomationEngine } from "../automations/engine";
 import { runWeeklyReportJob } from "../bi/report";
+import { runDailyOpsReportJob } from "../bi/outreach";
 
 const INTERVAL_MS = Number(process.env.AUTOMATION_INTERVAL_MS || process.env.FOLLOWUP_INTERVAL_MS || 60_000);
 
@@ -53,6 +54,12 @@ export function startSchedulers(): void {
       if (made > 0) console.log(`[scheduler] weekly reports generated for ${made} business(es)`);
     } catch (e) {
       console.error("[scheduler] weekly report run failed:", e);
+    }
+    try {
+      const made = await runDailyOpsReportJob();
+      if (made > 0) console.log(`[scheduler] daily ops reports generated for ${made} business(es)`);
+    } catch (e) {
+      console.error("[scheduler] daily ops report run failed:", e);
     }
   };
 
