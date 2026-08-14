@@ -71,6 +71,13 @@
       "when": 1786470000000,
       "tag": "0009_platform_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786550000000,
+      "tag": "0010_support_task_category",
+      "breakpoints": true
     }
   ]
 }

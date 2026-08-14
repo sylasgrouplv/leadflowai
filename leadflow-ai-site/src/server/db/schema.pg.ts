@@ -395,6 +395,7 @@ export const humanTasks = pgTable("human_tasks", {
   reason: text("reason").notNull(),
   conversationSummary: text("conversation_summary").default(""),
   recommendedAction: text("recommended_action").default(""),
+  category: text("category").notNull().default("other"),
   status: text("status").notNull().default("open"),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),

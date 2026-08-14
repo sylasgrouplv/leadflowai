@@ -18,6 +18,9 @@
  *                             reminder at appointment start − lead time)
  *   schedule_onboarding_reminders → schedule_onboarding_reminders (Phase 2 —
  *                             setup-step reminders for a new business)
+ *   categorize_human_task    → categorize_human_task (Phase 2 — Chunk F:
+ *                             deterministic support-ticket categorization of a
+ *                             human escalation task + owner notification)
  */
 import * as repo from "../db/repo";
 import { callAiTool, type ToolContext } from "../ai/tools/registry";
@@ -137,6 +140,16 @@ export async function executeAction(opts: {
         // business creation). No input needed — everything comes from the
         // tool's tenant context; idempotent per business.
         const res = await callAiTool("schedule_onboarding_reminders", ctx, {});
+        return { ok: true, result: res };
+      }
+      case "categorize_human_task": {
+        // The human task id comes from the HUMAN_ESCALATION event payload
+        // captured on the run (createHumanTaskRecord emits payload
+        // { taskId, priority, reason }) — the engine forwards it into
+        // actionConfig before this switch runs.
+        const taskId = typeof config.human_task_id === "string" ? config.human_task_id : null;
+        if (!taskId) return { ok: false, error: "no-human_task_id-in-config" };
+        const res = await callAiTool("categorize_human_task", ctx, { human_task_id: taskId });
         return { ok: true, result: res };
       }
 

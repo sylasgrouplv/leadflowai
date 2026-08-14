@@ -1148,6 +1148,17 @@ export async function resolveHumanTask(businessId: string, id: string): Promise<
     .execute();
   return getHumanTaskById(businessId, id);
 }
+/** Set the support category (billing/technical/emergency/complaint/other) on a human task — Phase 2 / Chunk F. */
+export async function updateHumanTaskCategory(businessId: string, id: string, category: string): Promise<typeof s.humanTasks.$inferSelect | null> {
+  const existing = await getHumanTaskById(businessId, id);
+  if (!existing) return null;
+  await getDb()
+    .update(s.humanTasks)
+    .set({ category, updatedAt: now() })
+    .where(and(eq(s.humanTasks.id, id), eq(s.humanTasks.businessId, businessId)))
+    .execute();
+  return getHumanTaskById(businessId, id);
+}
 
 // ---------------------------------------------------------------------------
 // Website widget settings (spec §14)
