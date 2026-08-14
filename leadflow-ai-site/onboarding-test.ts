@@ -47,6 +47,7 @@ import {
   onboardingEmail,
   onboardingStepOf,
   stepComplete,
+  ensureOwnerLead,
   ONBOARDING_DEFAULT_DELAY_DAYS,
 } from "./src/server/onboarding/agent";
 import { sendFollowUpRow } from "./src/server/followups/engine";
@@ -172,9 +173,11 @@ const DAY = 24 * 60 * MIN;
     const p1 = runs.find((r) => payloadOf(r).step === 1);
     pass("T2d run payload carries step + templateKey", !!p1 && payloadOf(p1).templateKey === "onboarding_step_1" && payloadOf(p1).step === 1, p1 ? JSON.stringify(payloadOf(p1)).slice(0, 140) : "missing");
     const ownerLead = await repo.listLeads(bizId, 1000).then((ls) => ls.find((l) => l.source === "onboarding"));
-    pass("T2e owner lead created (source onboarding, email = owner email)", !!ownerLead && ownerLead.email === owner.email && ownerLead.firstName === "Onboarding Test Owner", ownerLead ? `${ownerLead.firstName} <${ownerLead.email}>` : "none");
-    const schedAction = (await repo.listAgentActions(bizId, 400)).find((a) => a.action === "schedule_onboarding_reminders");
-    pass("T2f schedule audited via onboarding agent", !!schedAction && schedAction.agent === "onboarding" && schedAction.success === 1, schedAction ? schedAction.agent : "no audit");
+    pass("T2e owner lead created (source onboarding, email = owner email)", !!ownerLead && ownerLead.email === owner.email && ownerLead.firstName === "Onboarding" && ownerLead.lastName === "Test Owner", ownerLead ? `${ownerLead.firstName} ${ownerLead.lastName} <${ownerLead.email}>` : "none");
+    const actions = await repo.listAgentActions(bizId, 400);
+    const schedAction = actions.find((a) => a.action === "schedule_onboarding_reminders" && a.agent === "onboarding");
+    const schedAudit = actions.find((a) => a.action === "schedule_onboarding_reminders" && a.agent === "automation");
+    pass("T2f schedule audited via onboarding agent (tool audit + agent log)", !!schedAction && !!schedAudit && schedAction.success === 1, schedAction ? `${schedAction.agent}+${schedAudit?.agent ?? "none"}` : "no audit");
   }
 
   // ------------------------------------------------------------ T3 idempotency
@@ -263,13 +266,13 @@ const DAY = 24 * 60 * MIN;
     const o4 = await repo.createUser({ name: "NoChannel Owner", email: `onboarding-nc-${Date.now()}@test.local`, passwordHash: "$2b$10$test", role: "owner" });
     const b4 = await repo.createBusiness({ ownerId: o4.id, name: "NoChannel Co", category: "home_services" }); // no phone; owner email is the only channel
     await ensureDogfoodRules(b4.id);
-    // Owner email is present → a channel exists; opt the owner lead out after scheduling.
+    // Opt the owner lead out BEFORE scheduling → nothing is scheduled.
+    const ownerLead = await ensureOwnerLead(b4.id);
+    if (ownerLead) await repo.updateLead(b4.id, ownerLead.id, { optedOut: 1 });
     await emitEvent({ type: "BUSINESS_CREATED", businessId: b4.id, payload: {} });
     await runAutomationEngine();
-    const ownerLead = (await repo.listLeads(b4.id, 1000)).find((l) => l.source === "onboarding");
-    if (ownerLead) await repo.updateLead(b4.id, ownerLead.id, { optedOut: 1 });
-    const res = await scheduleOnboardingReminders(b4.id);
     const rows = (await db.select().from(s.followUps).where(eq(s.followUps.businessId, b4.id)).execute()).filter((r) => onboardingStepOf(r.templateKey) !== null);
+    const res = await scheduleOnboardingReminders(b4.id);
     pass("T7 opted-out owner → nothing scheduled", res.status === "skipped" && res.reason === "opted-out" && rows.length === 0, `${res.status}:${res.reason ?? ""} rows=${rows.length}`);
     await wipeBusiness(b4.id);
     await db.delete(s.users).where(eq(s.users.id, o4.id)).execute();
