@@ -102,7 +102,7 @@ async function wipeBusiness(id: string) {
   // Rules — the seed must create them explicitly (lazy path only runs on ticks).
   const rules = await repo.listAutomationRules(bizId);
   const ruleNames = rules.map((r) => r.name).sort();
-  pass("A12 default automation rules present", ruleNames.join(",") === "appointment_confirmation,appointment_reminder,job_completed_review,lead_created_welcome,onboarding_reminders,qualified_followup_sequence,support_ticket_categorization", ruleNames.join(","));
+  pass("A12 default automation rules present", ruleNames.join(",") === "appointment_confirmation,appointment_reminder,invoice_reminder,job_completed_review,lead_created_welcome,onboarding_reminders,qualified_followup_sequence,support_ticket_categorization", ruleNames.join(","));
   const reviewRule = rules.find((r) => r.name === "job_completed_review");
   pass("A13 review rule delay synced to config (3d)", reviewRule?.delayMs === 3 * 24 * 60 * 60 * 1000, `delayMs=${reviewRule?.delayMs}`);
 
@@ -110,7 +110,7 @@ async function wipeBusiness(id: string) {
   const again = await seedDogfood();
   pass("B1 re-run returns same business", again?.id === bizId, `first=${bizId} second=${again?.id}`);
   pass("B2 re-run did not duplicate services", (await repo.listServices(bizId)).length === 3, `n=${(await repo.listServices(bizId)).length}`);
-  pass("B3 re-run did not duplicate rules", (await repo.listAutomationRules(bizId)).length === 7, `n=${(await repo.listAutomationRules(bizId)).length}`);
+  pass("B3 re-run did not duplicate rules", (await repo.listAutomationRules(bizId)).length === 8, `n=${(await repo.listAutomationRules(bizId)).length}`);
 
   // ------------------------------------------------- C) admin tenant provisioning
   const app = await createApp();
@@ -163,7 +163,7 @@ async function wipeBusiness(id: string) {
     const cArea = JSON.parse(createdBiz.serviceAreaJson || "{}") as { zipCodes?: string[] };
     pass("C7 services + KB persisted", cServices.length === 1 && cKb.length === 1, `svc=${cServices.length} kb=${cKb.length}`);
     pass("C8 service area persisted", cArea.zipCodes?.includes("49221") === true, JSON.stringify(cArea));
-    pass("C9 default rules created by admin route", cRules.length === 7, `n=${cRules.length}`);
+    pass("C9 default rules created by admin route", cRules.length === 8, `n=${cRules.length}`);
   }
 
   // C10: duplicate owner email -> 409.

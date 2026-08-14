@@ -32,6 +32,7 @@ import { requestReview, recordFeedback } from "../../reviews/agent";
 import { scheduleAppointmentReminder } from "../../reminders/agent";
 import { scheduleOnboardingReminders } from "../../onboarding/agent";
 import { categorizeHumanTask } from "../../support/agent";
+import { scheduleInvoiceReminder } from "../../invoices/agent";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
@@ -544,6 +545,47 @@ export const TOOL_REGISTRY: ToolDef[] = [
     validate: async (ctx, input) =>
       (await repo.getHumanTaskById(ctx.businessId, input.human_task_id)) ? null : `human task ${input.human_task_id} does not belong to business ${ctx.businessId}`,
     handler: async (ctx, input) => categorizeHumanTask(ctx.businessId, input.human_task_id),
+    audit: true,
+  },
+  {
+    name: "create_invoice",
+    description:
+      "Create an invoice for a customer of this business (customer_name, customer_email, amount_cents, due_at) — the AI's only way to add an invoice row (dogfooding Phase 2 / Chunk H). Emits INVOICE_CREATED, which drives the invoice_reminder default rule (reminder at due date minus the business's lead time, default 48h). Tenant-scoped; never HIGH_RISK (billing changes stay human-only).",
+    permissionLevel: "WRITE",
+    inputSchema: z.object({
+      customer_name: z.string().trim().min(1).max(200),
+      customer_email: z.string().email().max(254),
+      amount_cents: z.number().int().min(0).max(100_000_000),
+      due_at: z.number().int().positive(),
+    }),
+    validate: async (ctx) => (await repo.getBusinessById(ctx.businessId)) ? null : `business ${ctx.businessId} not found`,
+    handler: async (ctx, input) => {
+      const invoice = await repo.createInvoice(ctx.businessId, {
+        customerName: input.customer_name,
+        customerEmail: input.customer_email,
+        amountCents: input.amount_cents,
+        dueAt: input.due_at,
+      });
+      if (!invoice) throw new Error("Invoice not created");
+      // Spec §30 — the invoice-created event drives the invoice_reminder rule.
+      await emitEvent({
+        type: "INVOICE_CREATED",
+        businessId: ctx.businessId,
+        payload: { invoiceId: invoice.id, businessId: ctx.businessId, dueAt: invoice.dueAt, amountCents: invoice.amountCents, customerEmail: invoice.customerEmail },
+      });
+      return invoice;
+    },
+    audit: true,
+  },
+  {
+    name: "schedule_invoice_reminder",
+    description:
+      "Schedule an invoice reminder for an unpaid invoice: computes the reminder time (due date minus the business's configured lead time, default 48 hours) and persists a follow-up row + run on the automation engine (Phase 2 / Chunk H). Idempotent per invoice; a paid or cancelled invoice is never reminded (re-checked at send time and cancelled immediately when marked paid/cancelled).",
+    permissionLevel: "WRITE",
+    inputSchema: z.object({ invoice_id: uuid("invoice_id") }),
+    validate: async (ctx, input) =>
+      (await repo.getInvoiceById(ctx.businessId, input.invoice_id)) ? null : `invoice ${input.invoice_id} does not belong to business ${ctx.businessId}`,
+    handler: async (ctx, input) => scheduleInvoiceReminder(ctx.businessId, input.invoice_id),
     audit: true,
   },
   {

@@ -73,6 +73,8 @@ export const FOLLOWUP_TYPES = ["sms", "email"] as const;
 export const FOLLOWUP_STATUSES = ["pending", "sent", "skipped", "cancelled", "paused"] as const;
 export const PLAN_NAMES = ["starter", "professional", "premium"] as const;
 export const SUBSCRIPTION_STATUSES = ["trialing", "active", "past_due", "canceled"] as const;
+export const INVOICE_STATUSES = ["unpaid", "paid", "cancelled"] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 export const INTEGRATION_PROVIDERS = ["ai", "sms", "email", "calendar", "crm", "stripe"] as const;
 export const INTEGRATION_STATUSES = ["not_configured", "connected", "mock", "error"] as const;
 export const KB_KINDS = ["faq", "policy", "service_info", "general"] as const;
@@ -340,6 +342,33 @@ export const subscriptions = sqliteTable("subscriptions", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+/**
+ * Invoices (dogfooding Phase 2 / Chunk H — invoice reminders, automation #10).
+ * The in-product invoice model: a business bills a customer (customer_name /
+ * customer_email) amount_cents due at due_at. Status: unpaid | paid | cancelled.
+ * Rows are created ONLY through the `create_invoice` WRITE tool (audited,
+ * tenant-scoped) which emits INVOICE_CREATED; the `invoice_reminder` default
+ * rule schedules a reminder follow-up at due_at minus the business's lead time
+ * (default 48h). Real Stripe billing stays deferred behind the StripeProvider
+ * interface — a future payment webhook marks invoices paid via the repo
+ * helpers (markInvoicePaid / markInvoiceCancelled), which also cancel any
+ * pending reminder for the invoice.
+ */
+export const invoices = sqliteTable("invoices", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id")
+    .notNull()
+    .references(() => businesses.id, { onDelete: "cascade" }),
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email").notNull(),
+  amountCents: integer("amount_cents").notNull().default(0),
+  /** Due date (epoch ms). The reminder fires at due_at − lead time. */
+  dueAt: integer("due_at").notNull(),
+  status: text("status").$type<InvoiceStatus>().notNull().default("unpaid"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => [index("invoices_business_due_idx").on(t.businessId, t.dueAt)]);
+
 // ---------------------------------------------------------------------------
 // AI agent activity / audit (safety + traceability)
 // ---------------------------------------------------------------------------
@@ -431,6 +460,7 @@ export const EVENTS = [
   "HUMAN_ESCALATION",
   "REVIEW_REQUESTED",
   "BUSINESS_CREATED",
+  "INVOICE_CREATED",
 ] as const;
 export type EventType = (typeof EVENTS)[number];
 

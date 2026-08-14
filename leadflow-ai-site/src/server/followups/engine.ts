@@ -31,6 +31,7 @@ import { recordSmsUsage } from "../usage/record";
 import { isAgentEnabled } from "../platform/settings";
 import { REMINDER_TEMPLATE_KEY, sendAppointmentReminder } from "../reminders/agent";
 import { onboardingStepOf, sendOnboardingReminder } from "../onboarding/agent";
+import { INVOICE_REMINDER_TEMPLATE_KEY, sendInvoiceReminder } from "../invoices/agent";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -49,6 +50,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Onboarding setup-step reminders (`onboarding_step_<n>` — Phase 2 / Chunk E)
 // are a fourth family, delegated to the Onboarding Agent
 // (src/server/onboarding/agent.ts), also through the ONE send entry point.
+// Invoice reminders (`invoice_reminder` — Phase 2 / Chunk H) are a fifth
+// family, delegated to the Invoice Agent (src/server/invoices/agent.ts), also
+// through the ONE send entry point.
 // ---------------------------------------------------------------------------
 
 function leadName(lead: { firstName: string; lastName: string | null }): string {
@@ -293,6 +297,24 @@ export async function sendFollowUpRow(businessId: string, followUpId: string): P
       }
     }
     return sendOnboardingReminder(businessId, f, lead, payload);
+  }
+  // Invoice reminders (Phase 2 — Chunk H): the invoice branch also runs BEFORE
+  // the generic stop rules — these rows exist BECAUSE an invoice was created,
+  // so stop rules that cancel a lead's follow-ups must not kill them. The
+  // Invoice Agent re-checks the invoice is still unpaid at fire time and
+  // cancels itself silently for paid/cancelled invoices (markInvoicePaid /
+  // markInvoiceCancelled also cancel the pending reminder immediately).
+  if (f.templateKey === INVOICE_REMINDER_TEMPLATE_KEY) {
+    const run = await repo.getRunForFollowUp(f.id);
+    let payload: Record<string, unknown> = {};
+    if (run) {
+      try {
+        payload = JSON.parse(run.payloadJson || "{}");
+      } catch {
+        /* unparsable — the reminder send will cancel (no invoice id) */
+      }
+    }
+    return sendInvoiceReminder(businessId, f, lead, payload);
   }
   // Stop rules evaluated at send time (safety over schedule).
   if (lead.optedOut === 1 || ["appointment_booked", "customer"].includes(lead.status)) {

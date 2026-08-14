@@ -21,6 +21,8 @@
  *   categorize_human_task    → categorize_human_task (Phase 2 — Chunk F:
  *                             deterministic support-ticket categorization of a
  *                             human escalation task + owner notification)
+ *   schedule_invoice_reminder → schedule_invoice_reminder (Phase 2 — Chunk H:
+ *                             invoice reminder at due date − lead time)
  */
 import * as repo from "../db/repo";
 import { callAiTool, type ToolContext } from "../ai/tools/registry";
@@ -150,6 +152,17 @@ export async function executeAction(opts: {
         const taskId = typeof config.human_task_id === "string" ? config.human_task_id : null;
         if (!taskId) return { ok: false, error: "no-human_task_id-in-config" };
         const res = await callAiTool("categorize_human_task", ctx, { human_task_id: taskId });
+        return { ok: true, result: res };
+      }
+
+      case "schedule_invoice_reminder": {
+        // The invoice id comes from the INVOICE_CREATED run payload — the
+        // engine forwards it into actionConfig before this switch runs.
+        // The action computes the reminder time (due date minus the business's
+        // configured lead time) and persists the reminder follow-up + run.
+        const invoiceId = typeof config.invoice_id === "string" ? config.invoice_id : null;
+        if (!invoiceId) return { ok: false, error: "no-invoice_id-in-config" };
+        const res = await callAiTool("schedule_invoice_reminder", ctx, { invoice_id: invoiceId });
         return { ok: true, result: res };
       }
 

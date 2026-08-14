@@ -117,7 +117,7 @@ const DAY = 24 * HOUR;
     !!reminderRule && reminderRule.triggerEvent === "APPOINTMENT_BOOKED" && reminderRule.action === "schedule_appointment_reminder" && reminderRule.conditionJson.includes("none"),
     reminderRule ? `${reminderRule.triggerEvent}→${reminderRule.action} delay=${reminderRule.delayMs}` : "missing"
   );
-  pass("T1b six default rules (dogfood)", rules.length === 7, `n=${rules.length}`);
+  pass("T1b eight default rules (dogfood)", rules.length === 8, `n=${rules.length}`);
   const cfg = reminderRule?.actionConfigJson ? (JSON.parse(reminderRule.actionConfigJson) as { reminder_minutes?: number }) : {};
   pass("T1c default lead time 120 in rule actionConfig", cfg.reminder_minutes === 120, JSON.stringify(cfg));
 

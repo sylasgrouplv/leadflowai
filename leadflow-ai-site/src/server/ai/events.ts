@@ -6,7 +6,7 @@
  *   LEAD_CREATED, LEAD_UPDATED, MESSAGE_RECEIVED, MESSAGE_SENT, LEAD_QUALIFIED,
  *   APPOINTMENT_REQUESTED, APPOINTMENT_BOOKED, APPOINTMENT_CANCELLED,
  *   JOB_COMPLETED, FOLLOWUP_DUE, FOLLOWUP_SENT, CUSTOMER_OPTED_OUT,
- *   HUMAN_ESCALATION, REVIEW_REQUESTED, BUSINESS_CREATED
+ *   HUMAN_ESCALATION, REVIEW_REQUESTED, BUSINESS_CREATED, INVOICE_CREATED
  *
  * Events carry type + business_id (tenant isolation, spec §33) + lead_id /
  * conversation_id when applicable + payload + timestamp. Each event is:
@@ -52,6 +52,7 @@ export const EVENT_TYPES = [
   "HUMAN_ESCALATION",
   "REVIEW_REQUESTED",
   "BUSINESS_CREATED",
+  "INVOICE_CREATED",
 ] as const;
 
 export interface EmitEventInput {
