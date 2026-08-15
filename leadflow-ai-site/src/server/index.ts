@@ -26,6 +26,7 @@ import { HttpError } from "./auth/guards";
 import { runMigrations } from "./db/migrate";
 import { runAutomationEngine } from "./automations/engine";
 import { runWeeklyReportJob } from "./bi/report";
+import { runDailyOpsReportJob } from "./bi/outreach";
 import { env } from "./env";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
@@ -39,8 +40,16 @@ export async function createApp() {
   /**
    * Internal one-pass worker tick — the serverless analogue of the always-on
    * scheduler in serve.ts (which runs runAutomationEngine + runWeeklyReportJob
-   * on an interval). Serverless deployments have no background process, so
-   * Vercel cron (vercel.json crons) or an external cron hits this endpoint.
+   * + runDailyOpsReportJob on an interval). Serverless deployments have no
+   * background process, so Vercel cron (vercel.json crons) or an external cron
+   * hits this endpoint.
+   *
+   * Cadence: each job gates itself (idempotent by design, mirroring
+   * jobs/scheduler.ts — no day-of-week checks needed in the route). The weekly
+   * BI report only fires once a full week has ended + the 1h settle window and
+   * no report exists yet; the daily ops report only fires for the previous
+   * fully-ended day and skips days that already have a report. Both return how
+   * many reports were created, so a manual tick is safe to call any time.
    *
    * Guard: Vercel cron jobs cannot send custom headers, so the endpoint
    * accepts EITHER the internal token (header `x-internal-token`, used for
@@ -55,6 +64,7 @@ export async function createApp() {
     if (c.req.method !== "GET" && c.req.method !== "POST") return c.json({ error: "Method not allowed" }, 405);
     const automation = await runAutomationEngine();
     const weeklyReports = await runWeeklyReportJob();
+    const dailyOpsReports = await runDailyOpsReportJob();
     return c.json({
       ok: true,
       automation: {
@@ -68,6 +78,7 @@ export async function createApp() {
         errors: automation.errors,
       },
       weeklyReports,
+      dailyOpsReports,
       time: Date.now(),
     });
   });
