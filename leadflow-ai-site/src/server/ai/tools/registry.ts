@@ -36,6 +36,7 @@ import { scheduleInvoiceReminder } from "../../invoices/agent";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
+import { getWebFetchProvider } from "../../integrations";
 import {
   computeLeadScore,
   displayScoreFor,
@@ -160,6 +161,24 @@ async function validateServiceInBusiness(ctx: ToolContext, serviceId: string): P
   return service ? null : `service ${serviceId} does not belong to business ${ctx.businessId}`;
 }
 
+/**
+ * Best-effort website domain extraction from a lead's notes (the prospect
+ * import writes "Website: https://…" into notes — Phase 1a). Used so
+ * research_prospect can enrich a campaign prospect without extra input.
+ * Returns undefined when no Website: entry exists (the provider then derives
+ * a clearly-labeled sample host instead of guessing a real domain).
+ */
+function domainFromLeadNotes(lead: { notes: string | null }): string | undefined {
+  const notes = lead.notes ?? "";
+  const m = notes.match(/website:?\s*(\S+)/i);
+  if (!m) return undefined;
+  return m[1]
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split(/[/,;\s]/)[0]
+    .trim() || undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Shared input shapes
 // ---------------------------------------------------------------------------
@@ -255,6 +274,29 @@ export const TOOL_REGISTRY: ToolDef[] = [
         days: input.days,
         leadId: input.lead_id,
       }),
+    audit: true,
+  },
+  {
+    name: "research_prospect",
+    description:
+      "Research/enrich a prospect lead with public web data (website, phone, service keywords, review snippets) through the WebFetchProvider (dogfooding Phase 3 / Chunk I — prospect research). READ only: returns facts to the agent; NEVER writes to the database — persist anything useful through WRITE tools (e.g. update_lead notes). Results are grounded facts only (no pricing, no availability, no unverifiable claims — global AI safety rules), and mock data is always clearly labeled as such.",
+    permissionLevel: "READ",
+    inputSchema: z.object({
+      lead_id: uuid("lead_id"),
+      /** Business name to research (defaults to the lead's name). */
+      name: z.string().trim().min(1).max(200).optional(),
+      /** Website domain to fetch (defaults to the Website: entry in the lead's notes). */
+      domain: z.string().trim().min(1).max(200).optional(),
+    }),
+    validate: async (ctx, input) => validateLeadInBusiness(ctx, input.lead_id),
+    handler: async (ctx, input) => {
+      const lead = await repo.getLeadById(ctx.businessId, input.lead_id);
+      if (!lead) throw new Error("Lead not found");
+      const name = input.name?.trim() || [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() || undefined;
+      const domain = input.domain?.trim() || domainFromLeadNotes(lead);
+      const result = await getWebFetchProvider().fetch({ name, domain });
+      return { lead_id: input.lead_id, ...result };
+    },
     audit: true,
   },
 

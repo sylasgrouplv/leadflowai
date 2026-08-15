@@ -221,3 +221,76 @@ export interface StripeProvider {
   /** Returns a hosted checkout URL. */
   createCheckoutSession(opts: { businessId: string; plan: string; successUrl: string }): Promise<{ url: string }>;
 }
+
+// ---------------------------------------------------------------------------
+
+/**
+ * WebFetchProvider — the prospect-research provider contract (dogfooding
+ * Phase 3 / Chunk I — "Prospect research: automated enrichment of prospect
+ * data").
+ *
+ * Mirror of the AI provider pattern (owner decision 2026-08-11: mock until
+ * real credentials, swap must stay config-only): the app calls
+ * getWebFetchProvider() and never constructs a provider directly; a real
+ * implementation (live web fetch / search API) swaps in via the
+ * WEBFETCH_PROVIDER env var — a new class behind this same interface + an env
+ * change, no app code touched.
+ *
+ * Safety contract (shared with the global AI safety rules, spec §3):
+ *   - the result is FACTS ONLY — never pricing, never availability, never
+ *     unverifiable claims (no invented numbers that could be mistaken for a
+ *     real quote),
+ *   - a mock provider MUST label its output as mock/sample data
+ *     (isMock: true + a human-readable note) so an agent can never mistake
+ *     sample enrichment for real research,
+ *   - providers MUST NOT write to the database — research results are tool
+ *     output only; any persistence happens through existing WRITE tools.
+ */
+export interface WebFetchInput {
+  /** Business/company name to research (e.g. "Smith's Heating & Cooling"). */
+  name?: string;
+  /** Website domain to fetch (e.g. "smithhvac.com"); normalized by the provider. */
+  domain?: string;
+}
+
+export interface WebReviewSnippet {
+  /** Where the snippet appears to come from (e.g. a review site). */
+  source: string;
+  /** The review text. */
+  text: string;
+  /** Star rating on the source's scale (0–5). */
+  rating: number;
+}
+
+export interface WebFetchResult {
+  /** Provider name (e.g. "mock-web-fetch"). */
+  provider: string;
+  /** True when the data is clearly labeled sample/mock enrichment, not a real fetch. */
+  isMock: boolean;
+  /** The normalized domain the research resolved to (null when none resolvable). */
+  resolvedDomain: string | null;
+  /** The business's website URL (mock providers use clearly-fake or sample URLs). */
+  website: string | null;
+  /** Public phone number, when found. */
+  phone: string | null;
+  /** Service keywords extracted from the public web presence. */
+  serviceKeywords: string[];
+  /** Short review snippets (labeled samples when mocked). */
+  reviewSnippets: WebReviewSnippet[];
+  /** Human-readable note labeling the data (mock/sample vs live). */
+  note: string;
+  /** Safety disclaimer — always present; research is facts only, no pricing/availability. */
+  disclaimer: string;
+  /** When the research was produced (epoch ms). */
+  fetchedAt: number;
+}
+
+export interface WebFetchProvider {
+  readonly name: string;
+  /**
+   * Enrich a prospect identity (business name and/or domain) with public web
+   * data. Deterministic for a mock; MUST label mock output; MUST NOT write to
+   * the database.
+   */
+  fetch(input: WebFetchInput): Promise<WebFetchResult>;
+}

@@ -7,12 +7,13 @@
  *   CALENDAR_PROVIDER=mock    (default) | google (future)
  *   CRM_PROVIDER=mock         (default) | hubspot (future)
  *   STRIPE_PROVIDER=mock      (default) | live (future)
+ *   WEBFETCH_PROVIDER=mock    (default) | live (future)
  *
  * Swapping a provider to a real implementation later = write the class
  * (same interface from ./types), then flip the env var. App code calls the
  * factory, never constructs providers directly.
  */
-import type { AiProvider, SmsProvider, EmailProvider, CalendarProvider, CrmProvider, StripeProvider } from "./types";
+import type { AiProvider, SmsProvider, EmailProvider, CalendarProvider, CrmProvider, StripeProvider, WebFetchProvider } from "./types";
 import { MockAiProvider } from "./ai";
 import { OpenAiProvider } from "./openai";
 import { AnthropicProvider } from "./anthropic";
@@ -21,6 +22,7 @@ import { MockEmailProvider } from "./email";
 import { MockCalendarProvider } from "./calendar";
 import { MockCrmProvider } from "./crm";
 import { MockStripeProvider } from "./stripe";
+import { MockWebFetchProvider } from "./webfetch";
 import { env } from "../env";
 
 const ai: Record<string, () => AiProvider> = {
@@ -46,6 +48,9 @@ const crm: Record<string, () => CrmProvider> = {
 const stripe: Record<string, () => StripeProvider> = {
   mock: () => new MockStripeProvider(),
 };
+const webFetch: Record<string, () => WebFetchProvider> = {
+  mock: () => new MockWebFetchProvider(),
+};
 
 function pick<T>(registry: Record<string, () => T>, kind: string, configured: string): T {
   const make = registry[configured];
@@ -65,6 +70,7 @@ let _email: EmailProvider | null = null;
 let _calendar: CalendarProvider | null = null;
 let _crm: CrmProvider | null = null;
 let _stripe: StripeProvider | null = null;
+let _webFetch: WebFetchProvider | null = null;
 
 export function getAiProvider(): AiProvider {
   return (_ai ??= pick(ai, "AI", env.aiProvider));
@@ -83,4 +89,7 @@ export function getCrmProvider(): CrmProvider {
 }
 export function getStripeProvider(): StripeProvider {
   return (_stripe ??= pick(stripe, "Stripe", env.stripeProvider));
+}
+export function getWebFetchProvider(): WebFetchProvider {
+  return (_webFetch ??= pick(webFetch, "WebFetch", env.webFetchProvider));
 }

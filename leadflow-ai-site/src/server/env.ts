@@ -37,6 +37,9 @@ export const env = {
   get stripeProvider() {
     return process.env.STRIPE_PROVIDER || "mock";
   },
+  get webFetchProvider() {
+    return process.env.WEBFETCH_PROVIDER || "mock";
+  },
   /** Provider API keys (health checks §40: a real provider without its key is
    *  ACTION REQUIRED; the mock provider is always HEALTHY). */
   get aiApiKey() {
