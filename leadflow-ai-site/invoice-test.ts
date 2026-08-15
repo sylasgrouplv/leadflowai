@@ -147,7 +147,7 @@ const DAY = 24 * HOUR;
   pass("T3c cross-tenant getInvoiceById null", (await repo.getInvoiceById(biz2.id, created.id)) === null, "");
 
   // ------------------------------------------------------------ T4 engine
-  await runAutomationEngine(bizId);
+  await runAutomationEngine();
   const fups = await repo.listFollowUpsWithLead(bizId, 500);
   const invFups = fups.filter(({ followUp }) => followUp.templateKey === INVOICE_REMINDER_TEMPLATE_KEY);
   pass("T4a reminder follow-up row created", invFups.length === 1, `n=${invFups.length}`);
@@ -167,7 +167,7 @@ const DAY = 24 * HOUR;
 
   // ------------------------------------------------------------ T6 send
   await repo.updateAutomationRun(bizId, run!.id, { runAt: repo.now() - 5000 });
-  await runAutomationEngine(bizId);
+  await runAutomationEngine();
   const sent = await db.select().from(s.followUps).where(eq(s.followUps.id, fup!.id)).execute();
   pass("T6a reminder row marked sent", sent[0]?.status === "sent", sent[0]?.status ?? "");
   const emailAudits = await db.select().from(s.agentActions).where(and(eq(s.agentActions.businessId, bizId), eq(s.agentActions.action, "send_email"))).execute();
@@ -179,7 +179,7 @@ const DAY = 24 * HOUR;
 
   // ------------------------------------------------------------ T7 markInvoicePaid
   const inv2 = (await callAiTool("create_invoice", ctx, { customer_name: "Bob Builder", customer_email: "bob@example.test", amount_cents: 99900, due_at: repo.now() + 10 * DAY })) as { id: string };
-  await runAutomationEngine(bizId);
+  await runAutomationEngine();
   const fups2 = await repo.listFollowUpsWithLead(bizId, 500);
   const fup2 = fups2.find(({ followUp }) => followUp.templateKey === INVOICE_REMINDER_TEMPLATE_KEY && followUp.status === "pending");
   pass("T7a second invoice reminder pending", !!fup2, "");
@@ -190,13 +190,13 @@ const DAY = 24 * HOUR;
 
   // ------------------------------------------------------------ T8 fire-time re-check
   const inv3 = (await callAiTool("create_invoice", ctx, { customer_name: "Cara Client", customer_email: "cara@example.test", amount_cents: 15000, due_at: repo.now() + 10 * DAY })) as { id: string };
-  await runAutomationEngine(bizId);
+  await runAutomationEngine();
   const fups3 = await repo.listFollowUpsWithLead(bizId, 500);
   const fup3 = fups3.find(({ followUp }) => followUp.templateKey === INVOICE_REMINDER_TEMPLATE_KEY && followUp.status === "pending" && followUp.scheduledFor > repo.now());
   const run3 = await repo.getRunForFollowUp(fup3!.followUp.id);
   await repo.markInvoiceCancelled(bizId, inv3.id); // settle BEFORE the run fires
   await repo.updateAutomationRun(bizId, run3!.id, { runAt: repo.now() - 5000 });
-  await runAutomationEngine(bizId);
+  await runAutomationEngine();
   const fup3after = await db.select().from(s.followUps).where(eq(s.followUps.id, fup3!.followUp.id)).execute();
   pass("T8 cancelled invoice reminder never sent (cancelled at fire time)", fup3after[0]?.status === "cancelled" && fup3after[0]?.attempts === 0, fup3after[0]?.status ?? "");
 
@@ -205,7 +205,7 @@ const DAY = 24 * HOUR;
   const optLead = (await repo.listLeads(bizId, 1000)).find((l) => l.email === "optout@example.test");
   await repo.updateLead(bizId, optLead!.id, { optedOut: 1 });
   const inv4 = (await callAiTool("create_invoice", ctx, { customer_name: "Opt Out", customer_email: "optout@example.test", amount_cents: 10000, due_at: repo.now() + 5 * DAY })) as { id: string };
-  await runAutomationEngine(bizId);
+  await runAutomationEngine();
   const fups4 = await repo.listFollowUpsWithLead(bizId, 500);
   const optRows = fups4.filter(({ followUp }) => followUp.templateKey === INVOICE_REMINDER_TEMPLATE_KEY && fups4.find((x) => x.lead?.id === optLead!.id));
   const optRow = fups4.find(({ followUp, lead: l }) => l?.id === optLead!.id && followUp.templateKey === INVOICE_REMINDER_TEMPLATE_KEY);
