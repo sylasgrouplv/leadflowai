@@ -380,6 +380,33 @@ export const invoices = pgTable("invoices", {
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 }, (t) => [index("invoices_business_due_idx").on(t.businessId, t.dueAt)]);
 
+/**
+ * Content pieces (dogfooding Phase 3 / Chunk J — content repurposing, #12).
+ * The in-product content model: original content (case studies, KB entries,
+ * posts) plus the AI-generated social drafts produced from them by the
+ * `repurpose_content` WRITE tool (audited, tenant-scoped). Drafts are stored
+ * with source_type 'social_draft' and source_ref = the source piece id. The
+ * status column defaults to 'draft': publishing is a human/HIGH-RISK action —
+ * the tool only ever creates drafts, never publishes.
+ */
+export const contentPieces = pgTable("content_pieces", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id")
+    .notNull()
+    .references(() => businesses.id, { onDelete: "cascade" }),
+  /** case_study | kb_entry | post | testimonial | other | social_draft */
+  sourceType: text("source_type").notNull().default("post"),
+  /** Optional reference to the origin (e.g. a KB row id or external URL/text). */
+  sourceRef: text("source_ref").notNull().default(""),
+  title: text("title").notNull(),
+  /** Original content (or the generated draft body for social_draft rows). */
+  body: text("body").notNull(),
+  /** draft | published — the AI tool only ever writes 'draft'. */
+  status: text("status").notNull().default("draft"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+}, (t) => [index("content_pieces_business_idx").on(t.businessId, t.createdAt)]);
+
 // ---------------------------------------------------------------------------
 // AI agent activity / audit (safety + traceability)
 // ---------------------------------------------------------------------------
@@ -472,6 +499,7 @@ export const EVENTS = [
   "REVIEW_REQUESTED",
   "BUSINESS_CREATED",
   "INVOICE_CREATED",
+  "CONTENT_REPURPOSED",
 ] as const;
 export type EventType = (typeof EVENTS)[number];
 

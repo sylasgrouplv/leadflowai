@@ -33,6 +33,7 @@ import { scheduleAppointmentReminder } from "../../reminders/agent";
 import { scheduleOnboardingReminders } from "../../onboarding/agent";
 import { categorizeHumanTask } from "../../support/agent";
 import { scheduleInvoiceReminder } from "../../invoices/agent";
+import { repurposeContent } from "../../content/repurpose";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
@@ -628,6 +629,44 @@ export const TOOL_REGISTRY: ToolDef[] = [
     validate: async (ctx, input) =>
       (await repo.getInvoiceById(ctx.businessId, input.invoice_id)) ? null : `invoice ${input.invoice_id} does not belong to business ${ctx.businessId}`,
     handler: async (ctx, input) => scheduleInvoiceReminder(ctx.businessId, input.invoice_id),
+    audit: true,
+  },
+  {
+    name: "repurpose_content",
+    description:
+      "Repurpose a piece of source content (inline text, an existing content_pieces row, or a knowledge_base entry) into platform-flavored social drafts — Facebook / Instagram / LinkedIn — through the deterministic offline mock-content-LLM (dogfooding Phase 3 / Chunk J — content repurposing). WRITE: persists the source (when inline or from the KB) and one content_pieces draft row per platform with status 'draft' — NEVER auto-publishes (publishing is a human/HIGH-RISK action). Drafts are grounded ONLY in the source text (verbatim sentences + source-derived hashtags — no invented facts, stats, prices, testimonials, or availability) and every draft carries the honest 'AI-generated draft — review before posting' label. Optional push_to_kb inserts the labeled drafts into the knowledge base. Emits CONTENT_REPURPOSED and notifies the owner. Tenant-scoped; audited like every tool.",
+    permissionLevel: "WRITE",
+    inputSchema: z
+      .object({
+        title: z.string().trim().min(1).max(200).optional(),
+        /** Inline source content (exactly one of body / source_piece_id / source_kb_id). */
+        body: z.string().trim().min(1).max(20000).optional(),
+        /** Existing content_pieces row to repurpose (tenant-scoped). */
+        source_piece_id: uuid("source_piece_id").optional(),
+        /** Existing knowledge_base entry to repurpose (tenant-scoped). */
+        source_kb_id: uuid("source_kb_id").optional(),
+        source_type: z.enum(["case_study", "kb_entry", "post", "testimonial", "other"]).optional(),
+        source_ref: z.string().trim().max(200).optional(),
+        /** Push the labeled drafts into the knowledge base too (explicit + audited). */
+        push_to_kb: z.boolean().optional(),
+        platforms: z.array(z.enum(["facebook", "instagram", "linkedin"])).min(1).max(3).optional(),
+      })
+      .refine((v) => [v.body, v.source_piece_id, v.source_kb_id].filter((x) => x !== undefined && x !== "").length === 1, {
+        message: "exactly one of body, source_piece_id, source_kb_id is required",
+        path: ["body"],
+      }),
+    validate: async (ctx, input) => {
+      if (input.source_piece_id) {
+        const piece = await repo.getContentPieceById(ctx.businessId, input.source_piece_id);
+        if (!piece) return `content piece ${input.source_piece_id} does not belong to business ${ctx.businessId}`;
+      }
+      if (input.source_kb_id) {
+        const kb = await repo.getKnowledgeById(ctx.businessId, input.source_kb_id);
+        if (!kb) return `knowledge entry ${input.source_kb_id} does not belong to business ${ctx.businessId}`;
+      }
+      return null;
+    },
+    handler: async (ctx, input) => repurposeContent(ctx.businessId, input),
     audit: true,
   },
   {
