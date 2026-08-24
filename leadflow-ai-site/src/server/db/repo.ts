@@ -1260,6 +1260,49 @@ export async function markInvoiceCancelled(businessId: string, id: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Content pieces (dogfooding Phase 3 / Chunk J — content repurposing, #12)
+// ---------------------------------------------------------------------------
+
+export interface NewContentPiece {
+  sourceType: string;
+  /** Optional reference to the origin (e.g. a KB row id or external URL/text). */
+  sourceRef?: string;
+  title: string;
+  body: string;
+  status?: string;
+}
+
+/** Create a content_pieces row (tenant-scoped). The `repurpose_content` tool is the ONLY app path here — it also emits CONTENT_REPURPOSED. */
+export async function createContentPiece(businessId: string, data: NewContentPiece) {
+  const t = now();
+  const id = newId();
+  await getDb()
+    .insert(s.contentPieces)
+    .values({
+      id,
+      businessId,
+      sourceType: data.sourceType,
+      sourceRef: data.sourceRef ?? "",
+      title: data.title,
+      body: data.body,
+      status: data.status ?? "draft",
+      createdAt: t,
+      updatedAt: t,
+    })
+    .execute();
+  return getContentPieceById(businessId, id);
+}
+
+export async function getContentPieceById(businessId: string, id: string) {
+  const rows = await getDb().select().from(s.contentPieces).where(and(eq(s.contentPieces.id, id), eq(s.contentPieces.businessId, businessId))).execute();
+  return rows[0] ?? null;
+}
+
+export async function listContentPieces(businessId: string, limit = 200) {
+  return await getDb().select().from(s.contentPieces).where(eq(s.contentPieces.businessId, businessId)).orderBy(desc(s.contentPieces.createdAt)).limit(limit).execute();
+}
+
+// ---------------------------------------------------------------------------
 // Website widget settings (spec §14)
 // ---------------------------------------------------------------------------
 
