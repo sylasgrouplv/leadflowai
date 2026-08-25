@@ -22,11 +22,13 @@ import { analyticsRoutes } from "./routes/analytics";
 import { reviewRoutes } from "./routes/reviews";
 import { reportRoutes } from "./routes/reports";
 import { importRoutes } from "./routes/import";
+import { socialRoutes } from "./routes/social";
 import { HttpError } from "./auth/guards";
 import { runMigrations } from "./db/migrate";
 import { runAutomationEngine } from "./automations/engine";
 import { runWeeklyReportJob } from "./bi/report";
 import { runDailyOpsReportJob } from "./bi/outreach";
+import { runSocialPostScheduler } from "./social/engine";
 import { env } from "./env";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
@@ -65,6 +67,7 @@ export async function createApp() {
     const automation = await runAutomationEngine();
     const weeklyReports = await runWeeklyReportJob();
     const dailyOpsReports = await runDailyOpsReportJob();
+    const socialPosts = await runSocialPostScheduler();
     return c.json({
       ok: true,
       automation: {
@@ -79,6 +82,7 @@ export async function createApp() {
       },
       weeklyReports,
       dailyOpsReports,
+      socialPosts,
       time: Date.now(),
     });
   });
@@ -102,6 +106,7 @@ export async function createApp() {
   app.route("/api/reviews", reviewRoutes);
   app.route("/api/reports", reportRoutes);
   app.route("/api/import", importRoutes);
+  app.route("/api/social", socialRoutes);
 
   app.notFound((c) => c.json({ error: "Not found" }, 404));
 

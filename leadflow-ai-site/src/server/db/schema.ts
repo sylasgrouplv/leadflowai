@@ -39,6 +39,7 @@ export const integrations = activeSchema.integrations;
 export const subscriptions = activeSchema.subscriptions;
 export const invoices = activeSchema.invoices;
 export const contentPieces = activeSchema.contentPieces;
+export const socialPosts = activeSchema.socialPosts;
 export const agentActions = activeSchema.agentActions;
 export const auditLogs = activeSchema.auditLogs;
 export const humanTasks = activeSchema.humanTasks;
