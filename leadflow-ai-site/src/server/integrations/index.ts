@@ -8,12 +8,13 @@
  *   CRM_PROVIDER=mock         (default) | hubspot (future)
  *   STRIPE_PROVIDER=mock      (default) | live (future)
  *   WEBFETCH_PROVIDER=mock    (default) | live (future)
+ *   SOCIAL_PROVIDER=mock      (default) | live (future)
  *
  * Swapping a provider to a real implementation later = write the class
  * (same interface from ./types), then flip the env var. App code calls the
  * factory, never constructs providers directly.
  */
-import type { AiProvider, SmsProvider, EmailProvider, CalendarProvider, CrmProvider, StripeProvider, WebFetchProvider } from "./types";
+import type { AiProvider, SmsProvider, EmailProvider, CalendarProvider, CrmProvider, StripeProvider, WebFetchProvider, SocialProvider } from "./types";
 import { MockAiProvider } from "./ai";
 import { OpenAiProvider } from "./openai";
 import { AnthropicProvider } from "./anthropic";
@@ -23,6 +24,7 @@ import { MockCalendarProvider } from "./calendar";
 import { MockCrmProvider } from "./crm";
 import { MockStripeProvider } from "./stripe";
 import { MockWebFetchProvider } from "./webfetch";
+import { MockSocialProvider } from "./social";
 import { env } from "../env";
 
 const ai: Record<string, () => AiProvider> = {
@@ -51,6 +53,9 @@ const stripe: Record<string, () => StripeProvider> = {
 const webFetch: Record<string, () => WebFetchProvider> = {
   mock: () => new MockWebFetchProvider(),
 };
+const social: Record<string, () => SocialProvider> = {
+  mock: () => new MockSocialProvider(),
+};
 
 function pick<T>(registry: Record<string, () => T>, kind: string, configured: string): T {
   const make = registry[configured];
@@ -71,6 +76,7 @@ let _calendar: CalendarProvider | null = null;
 let _crm: CrmProvider | null = null;
 let _stripe: StripeProvider | null = null;
 let _webFetch: WebFetchProvider | null = null;
+let _social: SocialProvider | null = null;
 
 export function getAiProvider(): AiProvider {
   return (_ai ??= pick(ai, "AI", env.aiProvider));
@@ -92,4 +98,7 @@ export function getStripeProvider(): StripeProvider {
 }
 export function getWebFetchProvider(): WebFetchProvider {
   return (_webFetch ??= pick(webFetch, "WebFetch", env.webFetchProvider));
+}
+export function getSocialProvider(): SocialProvider {
+  return (_social ??= pick(social, "Social", env.socialProvider));
 }

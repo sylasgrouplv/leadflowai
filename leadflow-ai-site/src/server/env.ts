@@ -40,6 +40,9 @@ export const env = {
   get webFetchProvider() {
     return process.env.WEBFETCH_PROVIDER || "mock";
   },
+  get socialProvider() {
+    return process.env.SOCIAL_PROVIDER || "mock";
+  },
   /** Provider API keys (health checks §40: a real provider without its key is
    *  ACTION REQUIRED; the mock provider is always HEALTHY). */
   get aiApiKey() {

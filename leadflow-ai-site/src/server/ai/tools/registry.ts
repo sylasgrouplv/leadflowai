@@ -34,6 +34,7 @@ import { scheduleOnboardingReminders } from "../../onboarding/agent";
 import { categorizeHumanTask } from "../../support/agent";
 import { scheduleInvoiceReminder } from "../../invoices/agent";
 import { repurposeContent } from "../../content/repurpose";
+import { scheduleSocialPost } from "../../social/engine";
 import { emitEvent } from "../events";
 import { checkBudgetAlerts } from "../../usage/budget";
 import { isAgentEnabled } from "../../platform/settings";
@@ -667,6 +668,24 @@ export const TOOL_REGISTRY: ToolDef[] = [
       return null;
     },
     handler: async (ctx, input) => repurposeContent(ctx.businessId, input),
+    audit: true,
+  },
+  {
+    name: "schedule_social_post",
+    description:
+      "Schedule a social-media post on the business's post queue (dogfooding Phase 3 / Chunk K — social media scheduling). WRITE: creates a social_posts row with status 'pending' and a scheduledFor (epoch ms). A background worker publishes the post when it's due (scheduledFor <= now) through the SocialProvider interface — mock by default (a clearly-labeled sample publish; a real API swaps in via SOCIAL_PROVIDER env). Safe WRITE (never HIGH_RISK — social posting is not financial or sensitive). Tenant-scoped and audited like every tool. Emits POST_PUBLISHED and notifies the owner when the post actually publishes.",
+    permissionLevel: "WRITE",
+    inputSchema: z
+      .object({
+        /** facebook | instagram | linkedin | x */
+        platform: z.enum(["facebook", "instagram", "linkedin", "x"]),
+        /** The post copy / content. */
+        message: z.string().trim().min(1).max(2000),
+        /** Epoch ms the post becomes due. The worker publishes posts with scheduledFor <= now. */
+        scheduledFor: z.number().int().positive(),
+      }),
+    validate: async () => null,
+    handler: async (ctx, input) => scheduleSocialPost(ctx.businessId, input),
     audit: true,
   },
   {
