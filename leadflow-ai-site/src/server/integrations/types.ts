@@ -294,3 +294,48 @@ export interface WebFetchProvider {
    */
   fetch(input: WebFetchInput): Promise<WebFetchResult>;
 }
+
+// ---------------------------------------------------------------------------
+
+/**
+ * SocialProvider — the social-media posting contract (dogfooding Phase 3 /
+ * Chunk K — "Social media scheduling", #13).
+ *
+ * Mirror of the other provider patterns (mock until real credentials; the swap
+ * stays config-only via SOCIAL_PROVIDER env). The app calls
+ * getSocialProvider() and never constructs one directly; a real implementation
+ * (Facebook/Instagram/LinkedIn/X Graph API) swaps in as a new class behind
+ * this same interface + an env change, no app code touched.
+ *
+ * A provider has ONE job: publish a post for a business on a platform and
+ * return a provider-side reference. It NEVER reads or writes the database —
+ * persistence/audit/tenant-scoping live in the posting engine
+ * (src/server/social/engine.ts). A mock provider MUST clearly label itself
+ * (name "mock-social") so nothing looks like a real network post.
+ */
+export interface SocialPostInput {
+  businessId: string;
+  /** facebook | instagram | linkedin | x */
+  platform: string;
+  /** The post copy / content. */
+  message: string;
+}
+
+export interface SocialPostResult {
+  /** Provider-side post id (mock uses a deterministic sample id). */
+  externalId: string;
+  status: "posted";
+  /** Timestamp the post was published (epoch ms). */
+  postedAt: number;
+  /** Human-readable note labeling the provider (mock/sample vs live). */
+  note: string;
+}
+
+export interface SocialProvider {
+  readonly name: string;
+  /**
+   * Publish a post. Deterministic for a mock; MUST label mock output; MUST NOT
+   * write to the database (the engine handles persistence + audit + events).
+   */
+  post(input: SocialPostInput): Promise<SocialPostResult>;
+}

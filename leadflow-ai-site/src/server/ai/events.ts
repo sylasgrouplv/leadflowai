@@ -7,7 +7,7 @@
  *   APPOINTMENT_REQUESTED, APPOINTMENT_BOOKED, APPOINTMENT_CANCELLED,
  *   JOB_COMPLETED, FOLLOWUP_DUE, FOLLOWUP_SENT, CUSTOMER_OPTED_OUT,
  *   HUMAN_ESCALATION, REVIEW_REQUESTED, BUSINESS_CREATED, INVOICE_CREATED,
- *   CONTENT_REPURPOSED
+ *   CONTENT_REPURPOSED, POST_PUBLISHED
  *
  * Events carry type + business_id (tenant isolation, spec §33) + lead_id /
  * conversation_id when applicable + payload + timestamp. Each event is:
@@ -55,6 +55,7 @@ export const EVENT_TYPES = [
   "BUSINESS_CREATED",
   "INVOICE_CREATED",
   "CONTENT_REPURPOSED",
+  "POST_PUBLISHED",
 ] as const;
 
 export interface EmitEventInput {

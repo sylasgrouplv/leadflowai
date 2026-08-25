@@ -142,7 +142,7 @@ const SOURCE_NO_NUMBERS_TITLE = "Kitchen Remodel Project";
   pass("J1d AI can call it (AI_ACCESSIBLE_TOOLS includes it)", AI_ACCESSIBLE_TOOLS.includes("repurpose_content"), "");
   const readTools = TOOL_REGISTRY.filter((t) => t.permissionLevel === "READ").map((t) => t.name);
   const writeTools = TOOL_REGISTRY.filter((t) => t.permissionLevel === "WRITE").map((t) => t.name);
-  pass("J1e WRITE tools = previous 19 + repurpose_content (READ unchanged at 5)", writeTools.length === 20 && readTools.length === 5 && writeTools.includes("repurpose_content"), `WRITE=${writeTools.length} READ=${readTools.length}`);
+  pass("J1e WRITE tools = previous 19 + repurpose_content + schedule_social_post (READ unchanged at 5)", writeTools.length === 21 && readTools.length === 5 && writeTools.includes("repurpose_content"), `WRITE=${writeTools.length} READ=${readTools.length}`);
 
   // =========================================================================
   console.log("\n== J2 mock-LLM — determinism + labeling + platforms ==");

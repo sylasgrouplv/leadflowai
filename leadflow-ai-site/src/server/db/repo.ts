@@ -1303,6 +1303,77 @@ export async function listContentPieces(businessId: string, limit = 200) {
 }
 
 // ---------------------------------------------------------------------------
+// Social posts (dogfooding Phase 3 / Chunk K — social media scheduling, #13)
+// ---------------------------------------------------------------------------
+
+export interface NewSocialPost {
+  platform: string;
+  message: string;
+  /** Epoch ms the post becomes due. */
+  scheduledFor: number;
+  status?: string;
+  provider?: string;
+}
+
+/** Create a social_posts row (tenant-scoped) in the queue. The `schedule_social_post` WRITE tool is the ONLY AI path here; the in-app social route is the other. */
+export async function createSocialPost(businessId: string, data: NewSocialPost) {
+  const t = now();
+  const id = newId();
+  await getDb()
+    .insert(s.socialPosts)
+    .values({
+      id,
+      businessId,
+      provider: data.provider ?? "mock",
+      platform: data.platform,
+      message: data.message,
+      scheduledFor: data.scheduledFor,
+      status: data.status ?? "pending",
+      postedAt: null,
+      error: null,
+      createdAt: t,
+      updatedAt: t,
+    })
+    .execute();
+  return getSocialPostById(businessId, id);
+}
+
+export async function getSocialPostById(businessId: string, id: string) {
+  const rows = await getDb().select().from(s.socialPosts).where(and(eq(s.socialPosts.id, id), eq(s.socialPosts.businessId, businessId))).execute();
+  return rows[0] ?? null;
+}
+
+export async function listSocialPosts(businessId: string, limit = 200) {
+  return await getDb().select().from(s.socialPosts).where(eq(s.socialPosts.businessId, businessId)).orderBy(asc(s.socialPosts.scheduledFor)).limit(limit).execute();
+}
+
+/** Due incoming posts for the worker (oldest first), optionally restricted to one business. */
+export async function listDueSocialPosts(limit = 100, nowMs = now(), businessId?: string) {
+  return await getDb()
+    .select()
+    .from(s.socialPosts)
+    .where(and(businessId ? eq(s.socialPosts.businessId, businessId) : undefined, eq(s.socialPosts.status, "pending"), sql`${s.socialPosts.scheduledFor} <= ${nowMs}`))
+    .orderBy(asc(s.socialPosts.scheduledFor))
+    .limit(limit)
+    .execute();
+}
+
+/** Update a social_posts row (tenant-scoped); returns the updated row or null. */
+export async function updateSocialPost(businessId: string, id: string, patch: Partial<typeof s.socialPosts.$inferInsert>) {
+  const existing = await getSocialPostById(businessId, id);
+  if (!existing) return null;
+  await getDb().update(s.socialPosts).set({ ...patch, updatedAt: now() }).where(and(eq(s.socialPosts.id, id), eq(s.socialPosts.businessId, businessId))).execute();
+  return getSocialPostById(businessId, id);
+}
+
+/** Cancel a pending social post (tenant-scoped). */
+export async function cancelSocialPost(businessId: string, id: string) {
+  const updated = await updateSocialPost(businessId, id, { status: "cancelled" });
+  return updated;
+}
+
+
+// ---------------------------------------------------------------------------
 // Website widget settings (spec §14)
 // ---------------------------------------------------------------------------
 

@@ -82,6 +82,9 @@ export const MESSAGE_SENDERS = ["ai", "lead", "employee", "system"] as const;
 export const APPOINTMENT_STATUSES = ["booked", "confirmed", "completed", "cancelled", "no_show"] as const;
 export const FOLLOWUP_TYPES = ["sms", "email"] as const;
 export const FOLLOWUP_STATUSES = ["pending", "sent", "skipped", "cancelled", "paused"] as const;
+/** Social posting queue lifecycle (dogfooding Phase 3 / Chunk K — #13). */
+export const SOCIAL_POST_STATUSES = ["pending", "posting", "posted", "failed", "cancelled"] as const;
+export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export const PLAN_NAMES = ["starter", "professional", "premium"] as const;
 export const SUBSCRIPTION_STATUSES = ["trialing", "active", "past_due", "canceled"] as const;
 export const INVOICE_STATUSES = ["unpaid", "paid", "cancelled"] as const;
@@ -407,6 +410,41 @@ export const contentPieces = pgTable("content_pieces", {
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 }, (t) => [index("content_pieces_business_idx").on(t.businessId, t.createdAt)]);
 
+/**
+ * Social posts (dogfooding Phase 3 / Chunk K — social media scheduling, #13).
+ * A per-business post queue. Rows are created ONLY by the `schedule_social_post`
+ * WRITE tool (audited, tenant-scoped) or the in-app social surface route. The
+ * scheduled worker (`src/server/social/engine.ts` runSocialPostScheduler, on
+ * the same tick as follow-ups/BI) picks due rows (status='pending' and
+ * scheduled_for <= now) and posts them through the SocialProvider interface —
+ * mock by default (a clearly-labeled "post" = provider.send + set posted), a
+ * real API later via SOCIAL_PROVIDER env (config-only swap). status lifecycle:
+ * pending → posting → posted | failed, or cancelled for a cancelled post. Safe
+ * WRITE action: audited through the tool registry, never HIGH_RISK.
+ */
+export const socialPosts = pgTable("social_posts", {
+  id: text("id").primaryKey(),
+  businessId: text("business_id")
+    .notNull()
+    .references(() => businesses.id, { onDelete: "cascade" }),
+  /** Provider name that posted this row (e.g. "mock-social"); set at post time. */
+  provider: text("provider").notNull().default("mock"),
+  /** facebook | instagram | linkedin | x — the destination platform. */
+  platform: text("platform").notNull(),
+  /** The post copy / content. */
+  message: text("message").notNull(),
+  /** When the post is due (epoch ms). The worker posts rows with scheduledFor <= now. */
+  scheduledFor: integer("scheduled_for").notNull(),
+  /** pending | posting | posted | failed | cancelled */
+  status: text("status").$type<SocialPostStatus>().notNull().default("pending"),
+  /** When the post was actually published (epoch ms); null until posted. */
+  postedAt: integer("posted_at"),
+  /** Last failure message (status='failed'); null otherwise. */
+  error: text("error"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => [index("social_posts_business_due_idx").on(t.businessId, t.scheduledFor)]);
+
 // ---------------------------------------------------------------------------
 // AI agent activity / audit (safety + traceability)
 // ---------------------------------------------------------------------------
@@ -500,6 +538,7 @@ export const EVENTS = [
   "BUSINESS_CREATED",
   "INVOICE_CREATED",
   "CONTENT_REPURPOSED",
+  "POST_PUBLISHED",
 ] as const;
 export type EventType = (typeof EVENTS)[number];
 
