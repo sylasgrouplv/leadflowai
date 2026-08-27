@@ -637,6 +637,7 @@ export interface NewAppointment {
   endAt: number;
   status?: (typeof APPOINTMENT_STATUSES)[number];
   notes?: string;
+  providerEventId?: string;
   createdAt?: number;
 }
 
@@ -645,9 +646,19 @@ export async function createAppointment(a: NewAppointment) {
   const id = newId();
   await getDb()
     .insert(s.appointments)
-    .values({ id, businessId: a.businessId, leadId: a.leadId ?? null, serviceId: a.serviceId ?? null, startAt: a.startAt, endAt: a.endAt, status: a.status ?? "booked", notes: a.notes ?? "", createdAt: t, updatedAt: t })
+    .values({ id, businessId: a.businessId, leadId: a.leadId ?? null, serviceId: a.serviceId ?? null, startAt: a.startAt, endAt: a.endAt, status: a.status ?? "booked", notes: a.notes ?? "", providerEventId: a.providerEventId ?? "", createdAt: t, updatedAt: t })
     .execute();
   return getAppointmentById(a.businessId, id);
+}
+
+/**
+ * Persist the calendar provider's event id for an appointment. The provider
+ * contract is DB-free, so the appointment layer stores the id returned by
+ * book() so a real provider (e.g. Google Calendar) can resolve/cancel the
+ * event later. Returns the refreshed row.
+ */
+export async function updateAppointmentProviderEventId(businessId: string, id: string, providerEventId: string) {
+  return updateAppointment(businessId, id, { providerEventId });
 }
 
 export async function getAppointmentById(businessId: string, id: string) {
