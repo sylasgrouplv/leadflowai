@@ -48,6 +48,11 @@ export const env = {
   get aiApiKey() {
     return process.env.AI_API_KEY || "";
   },
+  /** Real LLM model id (AI_PROVIDER=openai|anthropic). Empty → provider default
+   *  (OpenAI: gpt-4o-mini; Anthropic: claude-3-5-haiku-latest). */
+  get aiModel() {
+    return process.env.AI_MODEL || "";
+  },
   get smsApiKey() {
     return process.env.SMS_API_KEY || process.env.TWILIO_API_KEY || "";
   },
