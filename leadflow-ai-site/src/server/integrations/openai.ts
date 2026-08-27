@@ -1,17 +1,47 @@
 /**
- * OpenAI provider — STUB (spec §42).
+ * OpenAI provider — real Chat Completions implementation (spec §42).
  *
- * The interface is implemented and registered (AI_PROVIDER=openai), but a real
- * key is never used without an explicit owner decision: the swap is config-only
- * (set AI_API_KEY + AI_PROVIDER=openai). Until then every call throws a clear
- * error so a misconfiguration surfaces instead of silently degrading.
+ * Registered behind AI_PROVIDER=openai. When AI_API_KEY is set, this provider
+ * calls the OpenAI Chat Completions API (`/v1/chat/completions`) via plain
+ * fetch (no SDK dep — keeps the serverless bundle small). The model is read
+ * from AI_MODEL (default `gpt-4o-mini`). The mock (AI_PROVIDER=mock) remains
+ * the default, so nothing talks to a live LLM until an operator explicitly sets
+ * BOTH AI_PROVIDER=openai and AI_API_KEY — a config-only swap, no code change.
  *
- * Implementation note for the swap-in task: call the Chat Completions API with
- * the orchestrator context rendered as a system prompt + conversation history,
- * map the response to AiIntentResult / AiGeneratedReply, and enforce the global
- * safety rules in the prompt (never fabricate; answer only from context).
+ *   classifies intents  → parses the model's JSON into the 13-intent taxonomy,
+ *   generates replies  → grounds the reply in the business KB/context with the
+ *                        global safety rules (never fabricate; clarify when
+ *                        unknown), reports real usage (spec §32), and applies a
+ *                        timeout so a slow/hung upstream never blocks the chat.
+ *
+ * No key configured → every call throws a clear "not configured" error so the
+ * health check (§40) stays correct instead of silently degrading.
+ *
+ * Env: AI_PROVIDER=openai, AI_API_KEY (required), AI_MODEL (optional).
  */
-import type { AiProvider, AiRequest, AiResponse, AiIntentInput, AiIntentResult, AiGenerateInput, AiGeneratedReply } from "./types";
+import type {
+  AiProvider,
+  AiRequest,
+  AiResponse,
+  AiIntentInput,
+  AiIntentResult,
+  AiGenerateInput,
+  AiGeneratedReply,
+} from "./types";
+import { env } from "../env";
+import {
+  buildClassifyPrompt,
+  buildGenerateSystemPrompt,
+  buildHistoryMessages,
+  parseIntent,
+  parseGenerate,
+  postJson,
+  estimateUsageFromTokens,
+} from "./ai-prompt";
+
+const DEFAULT_MODEL = "gpt-4o-mini";
+const API_URL = "https://api.openai.com/v1/chat/completions";
+const TIMEOUT_MS = 30_000;
 
 const NOT_CONFIGURED =
   "AI provider 'openai' is not configured — set AI_API_KEY and AI_PROVIDER=openai to enable it. " +
@@ -20,13 +50,104 @@ const NOT_CONFIGURED =
 export class OpenAiProvider implements AiProvider {
   readonly name = "openai";
 
-  async classifyIntent(_input: AiIntentInput): Promise<AiIntentResult> {
-    throw new Error(NOT_CONFIGURED);
+  private key(): string {
+    const k = env.aiApiKey;
+    if (!k) throw new Error(NOT_CONFIGURED);
+    return k;
   }
-  async generateReply(_input: AiGenerateInput): Promise<AiGeneratedReply> {
-    throw new Error(NOT_CONFIGURED);
+
+  private async chat(messages: { role: "system" | "user" | "assistant"; content: string }[]) {
+    const body = {
+      model: env.aiModel || DEFAULT_MODEL,
+      messages,
+      temperature: 0.2,
+      max_tokens: 500,
+    };
+    const { text } = await postJson(
+      API_URL,
+      { authorization: `Bearer ${this.key()}` },
+      body,
+      TIMEOUT_MS
+    );
+    let parsed: { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error("AI provider (openai) returned an unparseable response body");
+    }
+    const content = parsed.choices?.[0]?.message?.content ?? "";
+    const usage = parsed.usage;
+    return {
+      content,
+      tokens:
+        usage && typeof usage.prompt_tokens === "number"
+          ? { inputTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens ?? 0 }
+          : undefined,
+    };
   }
-  async respond(_req: AiRequest): Promise<AiResponse> {
-    throw new Error(NOT_CONFIGURED);
+
+  async classifyIntent(input: AiIntentInput): Promise<AiIntentResult> {
+    const { system, user } = buildClassifyPrompt({
+      message: input.message,
+      businessName: input.businessName,
+      services: input.services,
+    });
+    const { content } = await this.chat([
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ]);
+    return parseIntent(content);
+  }
+
+  async generateReply(input: AiGenerateInput): Promise<AiGeneratedReply> {
+    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+      { role: "system", content: buildGenerateSystemPrompt(input) },
+    ];
+    for (const m of buildHistoryMessages(input.history)) {
+      messages.push({ role: m.role, content: m.content });
+    }
+    messages.push({ role: "user", content: input.message });
+    const { content, tokens } = await this.chat(messages);
+    const parsed = parseGenerate(content);
+    const usage = estimateUsageFromTokens(input, parsed.reply, tokens);
+    return { ...parsed, usage };
+  }
+
+  // Legacy single-shot path — kept for compatibility; classifies then generates.
+  async respond(req: AiRequest): Promise<AiResponse> {
+    const cls = await this.classifyIntent({
+      message: req.message,
+      businessName: req.businessName,
+      services: req.services,
+      memory: {},
+    });
+    const gen = await this.generateReply({
+      businessId: req.businessId,
+      businessName: req.businessName,
+      message: req.message,
+      intent: cls.intent,
+      intentConfidence: cls.confidence,
+      services: req.services,
+      knowledge: req.knowledge,
+      policies: req.policies,
+      hours: req.hours,
+      serviceArea: req.serviceArea,
+      escalation: req.escalation ?? { sensitivity: "medium", keywords: [] },
+      memory: {},
+      lead: null,
+      hasAppointment: false,
+      conversation: { channel: "chat", status: "active" },
+      history: req.history,
+    });
+    const intent: AiResponse["intent"] =
+      cls.intent === "APPOINTMENT_REQUEST" || cls.intent === "APPOINTMENT_CHANGE" || cls.intent === "APPOINTMENT_CANCEL"
+        ? "book"
+        : ["COMPLAINT", "REFUND_REQUEST", "HUMAN_REQUEST", "EMERGENCY", "APPOINTMENT_CANCEL"].includes(cls.intent)
+          ? "escalate"
+          : cls.intent === "UNKNOWN"
+            ? "unknown"
+            : "answer";
+    const confidence = cls.confidence === "HIGH" ? 0.9 : cls.confidence === "MEDIUM" ? 0.6 : 0.3;
+    return { reply: gen.reply, intent, confidence };
   }
 }
