@@ -254,6 +254,11 @@ export const appointments = pgTable("appointments", {
   endAt: bigint("end_at", { mode: "number" }).notNull(),
   status: text("status").notNull().default("booked"),
   notes: text("notes").default(""),
+  // Real provider event id (Google Calendar) returned by book(); empty for the
+  // mock / pre-migration rows. Used by cancel/reschedule instead of fabricating
+  // a synthetic id. The provider contract is DB-free, so the appointment layer
+  // persists this so the real provider can resolve the event later.
+  providerEventId: text("provider_event_id").default(""),
   createdAt: bigint("created_at", { mode: "number" }).notNull(),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 }, (t) => [index("appointments_business_idx").on(t.businessId, t.startAt)]);

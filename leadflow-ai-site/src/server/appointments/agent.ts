@@ -152,7 +152,7 @@ export async function bookAppointmentAction(businessId: string, input: z.infer<t
   if (!ok) throw new Error("That time isn't available — pick a slot from the list.");
 
   // 3) Create the appointment row.
-  const appointment = await repo.createAppointment({
+  let appointment = await repo.createAppointment({
     businessId,
     leadId,
     serviceId: service?.id ?? null,
@@ -170,6 +170,15 @@ export async function bookAppointmentAction(businessId: string, input: z.infer<t
     providerEventId = res.id;
   } catch (e) {
     console.error("[appointment] calendar.book failed:", e);
+  }
+
+  // 4b) Persist the real provider event id so a real provider (e.g. Google
+  //     Calendar) can resolve/cancel the event later. The provider contract is
+  //     DB-free, so the appointment layer owns this storage. The mock returns a
+  //     mock id too — we store whatever the provider returns, never a synthetic
+  //     value fabricated by the call site.
+  if (providerEventId) {
+    appointment = (await repo.updateAppointmentProviderEventId(businessId, appointment.id, providerEventId)) ?? appointment;
   }
 
   // 5) Lead status -> Appointment Booked (logged action).
@@ -303,10 +312,15 @@ export async function updateAppointmentStatusAction(
   const service = appointment.serviceId ? await repo.getServiceById(businessId, appointment.serviceId) : null;
 
   if (input.status === "cancelled") {
-    try {
-      await getCalendarProvider().cancel(businessId, `mock_cal_${appointment.startAt}`);
-    } catch {
-      /* best effort */
+    // Pass the persisted provider event id (Google) when present; older
+    // mock/pre-migration rows carry no id, so skip the provider call rather
+    // than fabricate a synthetic event id that would never match a real event.
+    if (appointment.providerEventId) {
+      try {
+        await getCalendarProvider().cancel(businessId, appointment.providerEventId);
+      } catch (e) {
+        console.error("[appointment] calendar.cancel failed:", e);
+      }
     }
     await repo.createNotification(businessId, {
       kind: "appointment",

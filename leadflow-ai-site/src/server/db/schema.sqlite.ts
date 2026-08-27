@@ -243,6 +243,11 @@ export const appointments = sqliteTable("appointments", {
   endAt: integer("end_at").notNull(),
   status: text("status").$type<(typeof APPOINTMENT_STATUSES)[number]>().notNull().default("booked"),
   notes: text("notes").default(""),
+  // Real provider event id (Google Calendar) returned by book(); empty for the
+  // mock / pre-migration rows. Used by cancel/reschedule instead of fabricating
+  // a synthetic id. The provider contract is DB-free, so the appointment layer
+  // persists this so the real provider can resolve the event later.
+  providerEventId: text("provider_event_id").default(""),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (t) => [index("appointments_business_idx").on(t.businessId, t.startAt)]);
