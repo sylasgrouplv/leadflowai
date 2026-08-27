@@ -49,7 +49,7 @@ export const env = {
     return process.env.AI_API_KEY || "";
   },
   /** Real LLM model id (AI_PROVIDER=openai|anthropic). Empty → provider default
-   *  (OpenAI: gpt-4o-mini; Anthropic: claude-3-5-haiku-latest). */
+   *  (OpenAI: gpt-4o-mini; Anthropic: claude-haiku-4-5). */
   get aiModel() {
     return process.env.AI_MODEL || "";
   },

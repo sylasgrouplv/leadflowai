@@ -4,7 +4,7 @@
  * Registered behind AI_PROVIDER=anthropic. When AI_API_KEY is set, this
  * provider calls the Anthropic Messages API (`/v1/messages`) via plain fetch
  * (no SDK dep — keeps the serverless bundle small). The model is read from
- * AI_MODEL (default `claude-3-5-haiku-latest` for low latency/cost). The mock
+ * AI_MODEL (default `claude-haiku-4-5` for low latency/cost). The mock
  * (AI_PROVIDER=mock) remains the default, so nothing talks to a live LLM until
  * an operator explicitly sets BOTH AI_PROVIDER=anthropic and AI_API_KEY — a
  * config-only swap, no code change.
@@ -40,7 +40,7 @@ import {
   estimateUsageFromTokens,
 } from "./ai-prompt";
 
-const DEFAULT_MODEL = "claude-3-5-haiku-latest";
+const DEFAULT_MODEL = "claude-haiku-4-5";
 const API_URL = "https://api.anthropic.com/v1/messages";
 const API_VERSION = "2023-06-01";
 const TIMEOUT_MS = 30_000;
