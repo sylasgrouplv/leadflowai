@@ -22,6 +22,7 @@ import { MockSmsProvider } from "./sms";
 import { MockEmailProvider } from "./email";
 import { MockCalendarProvider } from "./calendar";
 import { MockCrmProvider } from "./crm";
+import { HubSpotCrmProvider } from "./hubspot";
 import { MockStripeProvider } from "./stripe";
 import { MockWebFetchProvider } from "./webfetch";
 import { MockSocialProvider } from "./social";
@@ -46,6 +47,9 @@ const calendar: Record<string, () => CalendarProvider> = {
 };
 const crm: Record<string, () => CrmProvider> = {
   mock: () => new MockCrmProvider(),
+  // Real CRM provider: registered + interface-complete, but it throws a clear
+  // "set HUBSPOT_API_KEY" error until a key is configured (config-only swap).
+  hubspot: () => new HubSpotCrmProvider(),
 };
 const stripe: Record<string, () => StripeProvider> = {
   mock: () => new MockStripeProvider(),
