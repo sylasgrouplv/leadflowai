@@ -41,6 +41,10 @@ import { env } from "../env";
 
 export const HUBSPOT_BASE_URL = "https://api.hubapi.com";
 export const LF_PROPERTY_GROUP = "leadflow_ai";
+/** Extra backfill-import contact properties (Phase 1 task 4). Stored in the
+ *  same `leadflow_ai` property group; used by the one-time prospect import. */
+export const LF_IMPORT_PROPERTY_KEY = "lf_import_key";
+export const LF_IMPORT_PROPERTY_SOURCE = "lf_source_file";
 
 const NOT_CONFIGURED =
   "CRM provider 'hubspot' is not configured — set HUBSPOT_API_KEY and CRM_PROVIDER=hubspot to enable it. " +
@@ -172,6 +176,19 @@ export const LF_CONTACT_PROPERTIES = {
     fieldType: "text",
     description: "LeadFlow lead service area / location.",
   },
+  lf_import_key: {
+    label: "LF Import Key (dedupe)",
+    type: "string",
+    fieldType: "text",
+    description:
+      "LeadFlow prospect-import stable dedupe key — email when present, else business Name|City|State.",
+  },
+  lf_source_file: {
+    label: "LF Source File",
+    type: "string",
+    fieldType: "text",
+    description: "LeadFlow prospect-import source (which market CSV the prospect came from).",
+  },
 } as const;
 
 export type LfPropertyName = keyof typeof LF_CONTACT_PROPERTIES;
@@ -287,6 +304,15 @@ export class HubSpotClient {
     }
   }
 
+  /** Raw GET for list endpoints that return `{results, paging}` (used by the
+   *  prospect import to page through every contact/company once for the
+   *  idempotency maps). */
+  async listObjects<T extends HubSpotObject = HubSpotObject>(
+    pathWithQuery: string
+  ): Promise<{ results: T[]; paging?: { next?: { after?: string } } }> {
+    return this.request("GET", pathWithQuery);
+  }
+
   // --- Contacts -------------------------------------------------------------
 
   async createContact(properties: HubSpotProperties): Promise<HubSpotContact> {
@@ -367,10 +393,36 @@ export class HubSpotClient {
     return res.results;
   }
 
+  /** Batch create contacts (≤100) — used by the prospect import for email-less
+   *  rows (dedupe key is the lf_import_key custom property, not email). */
+  async batchCreateContacts(records: { properties: HubSpotProperties }[]): Promise<HubSpotContact[]> {
+    const res = await this.request<{ results: HubSpotContact[] }>(
+      "POST",
+      "/crm/v3/objects/contacts/batch/create",
+      { inputs: records.map((r) => ({ properties: r.properties })) }
+    );
+    return res.results;
+  }
+
+  /** Batch create companies (≤100) — used by the prospect import. */
+  async batchCreateCompanies(records: { properties: HubSpotProperties }[]): Promise<HubSpotCompany[]> {
+    const res = await this.request<{ results: HubSpotCompany[] }>(
+      "POST",
+      "/crm/v3/objects/companies/batch/create",
+      { inputs: records.map((r) => ({ properties: r.properties })) }
+    );
+    return res.results;
+  }
+
   // --- Companies ------------------------------------------------------------
 
   async createCompany(properties: HubSpotProperties): Promise<HubSpotCompany> {
     return this.request("POST", "/crm/v3/objects/companies", { properties });
+  }
+
+  /** PATCH a company's properties (import-time domain enrichment). */
+  async updateCompany(companyId: string, properties: HubSpotProperties): Promise<HubSpotCompany> {
+    return this.request("PATCH", `/crm/v3/objects/companies/${companyId}`, { properties });
   }
 
   /** Search for ONE company by domain — null when absent. */
@@ -387,20 +439,90 @@ export class HubSpotClient {
     return res.results[0] ?? null;
   }
 
+  /** Search for ONE company by exact name — null when absent. */
+  async searchCompaniesByName(name: string): Promise<HubSpotCompany | null> {
+    const res = await this.request<HubSpotSearchResult<HubSpotCompany>>(
+      "POST",
+      "/crm/v3/objects/companies/search",
+      {
+        filterGroups: [{ filters: [{ propertyName: "name", operator: "EQ", value: name }] }],
+        limit: 1,
+        properties: ["domain", "name", "phone"],
+      }
+    );
+    return res.results[0] ?? null;
+  }
+
+  /** Read companies by id (≤100) — used to re-check `domain` on a company
+   *  that was found by name so the email-dedupe path only matches verified
+   *  same-domain companies. */
+  async batchReadCompaniesByIds(ids: string[]): Promise<HubSpotCompany[]> {
+    const res = await this.request<{ results: HubSpotCompany[] }>(
+      "POST",
+      "/crm/v3/objects/companies/batch/read",
+      { inputs: ids.map((id) => ({ id })), idProperty: "id" }
+    );
+    return res.results;
+  }
+
   /** Link a contact to a company (contact belongs-to company). */
   async associateContactToCompany(contactId: string, companyId: string): Promise<void> {
     await this.request("PUT", `/crm/v3/objects/contacts/${contactId}/associations/companies/${companyId}`);
   }
 
+  /** Search for ONE contact by exact value in a custom text property
+   *  (`lf_import_key`, `lf_source_file`, …) — null when absent. */
+  async searchContactsByProperty(propertyName: string, value: string): Promise<HubSpotContact | null> {
+    const res = await this.searchContacts({
+      filterGroups: [{ filters: [{ propertyName, operator: "EQ", value }] }],
+      limit: 1,
+      properties: [...LF_CONTACT_READ_PROPERTIES, "lf_import_key", "lf_source_file"],
+    });
+    return res.results[0] ?? null;
+  }
+
+  /** Batch create-or-update contacts keyed by a custom dedupe property
+   *  (`lf_import_key`), for idempotent bulk import of rows that may lack an
+   *  email. Each record must carry that property in `properties`. */
+  async batchUpsertContactsByProperty(
+    propertyName: string,
+    records: { key: string; properties: HubSpotProperties }[]
+  ): Promise<HubSpotContact[]> {
+    const res = await this.request<{ results: HubSpotContact[] }>(
+      "POST",
+      "/crm/v3/objects/contacts/batch/upsert",
+      {
+        inputs: records.map((r) => ({
+          id: `${LF_PROPERTY_GROUP}-${r.key}`,
+          idProperty: propertyName,
+          properties: r.properties,
+        })),
+        idProperty: propertyName,
+      }
+    );
+    return res.results;
+  }
+
   // --- Custom properties ----------------------------------------------------
 
   /**
-   * Create the five LeadFlow custom contact properties (scope §3.1). Idempotent:
-   * a 409 "already exists" per property is treated as success. Returns the
-   * names that were ensured.
+   * Create the `leadflow_ai` property group on contacts if absent, then create
+   * the LeadFlow custom contact properties (scope §3.1 + the two backfill
+   * import props). Idempotent: a 409 "already exists" per property/group is
+   * treated as success. Returns the names that were ensured.
    */
   async ensureContactProperties(): Promise<string[]> {
     const ensured: string[] = [];
+    try {
+      await this.request("POST", "/crm/v3/properties/contacts/groups", {
+        name: LF_PROPERTY_GROUP,
+        label: "LeadFlow AI",
+        displayOrder: 0,
+      });
+      ensured.push(`group:${LF_PROPERTY_GROUP}`);
+    } catch (e) {
+      if (!isHubSpotStatus(e, 409)) throw e; // group already exists → fine
+    }
     const names = Object.keys(LF_CONTACT_PROPERTIES) as LfPropertyName[];
     for (const name of names) {
       try {
