@@ -197,6 +197,9 @@ const expectedProps = {
 {
   const payloads: unknown[] = [];
   const fetchImpl = fakeFetch((call) => {
+    if (call.url.endsWith("/crm/v3/properties/contacts/groups")) {
+      return { status: 201, json: { name: "leadflow_ai", label: "LeadFlow AI" } };
+    }
     if (call.url.endsWith("/crm/v3/properties/contacts")) {
       payloads.push(call.body);
       return { status: 201, json: { name: (call.body as { name: string }).name } };
@@ -206,18 +209,26 @@ const expectedProps = {
   const client = new HubSpotClient({ apiKey: API_KEY, fetchImpl });
   const ensured = await client.ensureContactProperties();
   const names = Object.keys(LF_CONTACT_PROPERTIES);
-  pass("T5 posts all five custom properties", payloads.length === 5 && ensured.length === 5, `ensured=${ensured.join(",")}`);
+  pass(
+    "T5 group created first, then all custom properties",
+    ensured[0] === "group:leadflow_ai" && payloads.length === names.length && ensured.length === names.length + 1,
+    `ensured=${ensured.join(",")}`
+  );
   assertEq("T5 payload names", (payloads as { name: string }[]).map((p) => p.name).sort(), names.sort());
   pass("T5 every payload uses the leadflow_ai group", (payloads as { groupName: string }[]).every((p) => p.groupName === LF_PROPERTY_GROUP));
   const byName = Object.fromEntries((payloads as { name: string; type: string; fieldType: string }[]).map((p) => [p.name, p]));
   pass("T5 lf_lead_score is a number", byName.lf_lead_score?.type === "number" && byName.lf_lead_score?.fieldType === "number");
-  pass("T5 classification/opted_out/service/location are text", ["lf_classification", "lf_opted_out", "lf_service_requested", "lf_location"].every((n) => byName[n]?.type === "string"));
+  pass(
+    "T5 classification/opted_out/service/location/import are text",
+    ["lf_classification", "lf_opted_out", "lf_service_requested", "lf_location", "lf_import_key", "lf_source_file"].every((n) => byName[n]?.type === "string")
+  );
 
   // 409 "already exists" → treated as success (idempotent re-run).
   const fetch409 = fakeFetch(() => ({ status: 409, json: { status: "error", message: "Property already exists." } }));
   const client409 = new HubSpotClient({ apiKey: API_KEY, fetchImpl: fetch409 });
   const reEnsured = await client409.ensureContactProperties();
   pass("T5 409 already-exists is not a failure", reEnsured.length === 0, `calls=${fetch409.calls.length}`);
+  pass("T5 group 409 is not a failure either", fetch409.calls[0].url.endsWith("/groups"));
 }
 
 // --- T6: 409 version-conflict → refetch → re-apply → retry once -------------
@@ -342,6 +353,52 @@ import("./src/server/integrations/index.ts").then((m) => { console.log(m.getCrmP
   const stdout = Buffer.from(out.stdout ?? "").toString().trim();
   const stderr = Buffer.from(out.stderr ?? "").toString().trim();
   pass("T11 CRM_PROVIDER=hubspot → provider name 'hubspot'", out.exitCode === 0 && stdout === "hubspot", `exit=${out.exitCode} out="${stdout}" err="${stderr.slice(0, 160)}"`);
+}
+
+// --- T12: backfill-import helpers (Phase 1 task 4) --------------------------
+{
+  const fetchImpl = fakeFetch((call) => {
+    if (call.url.includes("/crm/v3/objects/contacts?") || call.url.includes("/crm/v3/objects/companies?")) {
+      return { status: 200, json: { results: [{ id: "1" }], paging: { next: { after: "2" } } } };
+    }
+    if (call.url.includes("/companies/search")) return { status: 200, json: { results: [{ id: "3001", properties: { name: "Pest Patrol", domain: "pestpatrol.com" } }] } };
+    if (call.url.includes("/companies/batch/read")) return { status: 200, json: { results: [{ id: "3001", properties: { domain: "pestpatrol.com" } }] } };
+    if (call.url.includes("/contacts/batch/create")) return { status: 201, json: { results: [{ id: "1003" }] } };
+    if (call.url.includes("/companies/batch/create")) return { status: 201, json: { results: [{ id: "3002" }] } };
+    if (call.method === "PATCH" && call.url.includes("/companies/")) return { status: 200, json: { id: "3001" } };
+    if (call.url.includes("/contacts/search")) return { status: 200, json: { results: [{ id: "1004", properties: { lf_import_key: "x" } }] } };
+    return { status: 200, json: {} };
+  });
+  const client = new HubSpotClient({ apiKey: API_KEY, fetchImpl });
+
+  const c1 = await client.listObjects(`/crm/v3/objects/contacts?limit=100&properties=email`);
+  pass("T12 listObjects pages and returns paging cursor", c1.results.length === 1 && c1.paging?.next?.after === "2");
+
+  const byName = await client.searchCompaniesByName("Pest Patrol");
+  pass("T12 searchCompaniesByName returns company", byName?.id === "3001");
+
+  const read = await client.batchReadCompaniesByIds(["3001"]);
+  pass("T12 batchReadCompaniesByIds", read[0]?.id === "3001");
+
+  const created = await client.batchCreateContacts([{ properties: { email: "x@example.com" } }]);
+  pass("T12 batchCreateContacts", created[0]?.id === "1003");
+
+  const co = await client.batchCreateCompanies([{ properties: { name: "Pest Patrol" } }]);
+  pass("T12 batchCreateCompanies", co[0]?.id === "3002");
+
+  const upd = await client.updateCompany("3001", { domain: "pestpatrol.com" });
+  const patch = fetchImpl.calls.find((c) => c.method === "PATCH" && c.url.includes("/companies/3001"));
+  pass("T12 updateCompany PATCHes the company", upd?.id === "3001" && patch !== undefined);
+  const patchBody = (patch?.body as { properties: Record<string, unknown> }).properties;
+  assertEq("T12 updateCompany maps domain", patchBody, { domain: "pestpatrol.com" });
+
+  const byProp = await client.searchContactsByProperty("lf_import_key", "name");
+  pass("T12 searchContactsByProperty", byProp?.id === "1004");
+  const searchBody = fetchImpl.calls.find((c) => c.url.endsWith("/contacts/search"))?.body as { filterGroups: { filters: { propertyName: string; operator: string; value: string }[] }[] };
+  pass(
+    "T12 searchContactsByProperty filters lf_import_key EQ",
+    searchBody?.filterGroups?.[0]?.filters?.[0]?.propertyName === "lf_import_key" && searchBody.filterGroups[0].filters[0].value === "name"
+  );
 }
 
 console.log(failures === 0 ? "\nALL HUBSPOT TESTS PASS" : `\n${failures} FAILURE(S)`);
