@@ -251,6 +251,11 @@ export function toHubSpotContactProperties(lead: CrmLead): HubSpotProperties {
 // HubSpotClient — plain fetch, injectable for hermetic tests
 // ---------------------------------------------------------------------------
 
+/** HubSpot standard default association type id for Contact→Company (the v3
+ *  typed PUT requires a type id; a bare PUT 404s on live portals with an
+ *  empty body). */
+export const CONTACT_COMPANY_ASSOCIATION_TYPE_ID = 279;
+
 export interface HubSpotClientOptions {
   /** Private App access token. Defaults to env.hubspotApiKey. */
   apiKey?: string;
@@ -465,9 +470,50 @@ export class HubSpotClient {
     return res.results;
   }
 
-  /** Link a contact to a company (contact belongs-to company). */
+  /**
+   * Link a contact to a company (contact belongs-to company).
+   *
+   * Uses the v3 typed association endpoint: a bare PUT to
+   * `/associations/companies/{companyId}` (no type id) 404s on real portals
+   * with an empty body — the type id is required. `279` is HubSpot's standard
+   * default type id for the Contact→Company association (label
+   * "contact_to_company_unlabeled" on this portal).
+   */
   async associateContactToCompany(contactId: string, companyId: string): Promise<void> {
-    await this.request("PUT", `/crm/v3/objects/contacts/${contactId}/associations/companies/${companyId}`);
+    await this.request(
+      "PUT",
+      `/crm/v3/objects/contacts/${contactId}/associations/companies/${companyId}/${CONTACT_COMPANY_ASSOCIATION_TYPE_ID}`
+    );
+  }
+
+  /**
+   * Read contact→company associations for up to 100 contacts (batch/read).
+   * Returns a map of contactId → associated company ids, plus per-input errors
+   * (a contact with no company association comes back as an error entry with
+   * category OBJECT_NOT_FOUND — that is a normal "no association", not a
+   * failure). Used by the association-completion pass to stay idempotent.
+   */
+  async readContactCompanyAssociations(
+    contactIds: string[]
+  ): Promise<{ byContact: Map<string, string[]>; errors: { id: string; message: string }[] }> {
+    const res = await this.request<{
+      results?: { from?: { id?: string }; to?: { id?: string; type?: string }[] }[];
+      errors?: { message?: string; context?: { fromObjectId?: string[] } }[];
+    }>("POST", "/crm/v3/associations/contacts/companies/batch/read", {
+      inputs: contactIds.map((id) => ({ id })),
+      properties: [],
+    });
+    const byContact = new Map<string, string[]>();
+    for (const r of res.results ?? []) {
+      if (!r.from?.id) continue;
+      const to = (r.to ?? []).map((t) => t.id).filter((x): x is string => Boolean(x));
+      if (to.length) byContact.set(r.from.id, to);
+    }
+    const errors: { id: string; message: string }[] = [];
+    for (const e of res.errors ?? []) {
+      for (const id of e.context?.fromObjectId ?? []) errors.push({ id, message: e.message ?? "unknown" });
+    }
+    return { byContact, errors };
   }
 
   /** Search for ONE contact by exact value in a custom text property

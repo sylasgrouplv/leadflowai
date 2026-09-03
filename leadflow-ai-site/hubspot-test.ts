@@ -301,7 +301,15 @@ const expectedProps = {
     if (call.url.endsWith("/crm/v3/objects/contacts/batch/upsert")) return { status: 200, json: { results: [{ id: "1002" }] } };
     if (call.url.endsWith("/crm/v3/objects/companies/search")) return { status: 200, json: { results: [{ id: "3001", properties: { domain: "smithhvac.com" } }] } };
     if (call.method === "POST" && call.url.endsWith("/crm/v3/objects/companies")) return { status: 201, json: { id: "3001" } };
-    if (call.url.includes("/crm/v3/objects/contacts/1001/associations/companies/3001")) return { status: 204, text: "" };
+    if (call.url.includes("/crm/v3/objects/contacts/1001/associations/companies/3001/279")) return { status: 204, text: "" };
+    if (call.url.includes("/associations/contacts/companies/batch/read"))
+      return {
+        status: 207,
+        json: {
+          results: [{ from: { id: "1001" }, to: [{ id: "3001", type: "contact_to_company" }] }],
+          errors: [{ status: "error", category: "OBJECT_NOT_FOUND", message: "No company is associated with contact 9999.", context: { fromObjectId: ["9999"], fromObjectType: ["contact"], toObjectType: ["company"] } }],
+        },
+      };
     return { status: 200, json: {} };
   });
   const client = new HubSpotClient({ apiKey: API_KEY, fetchImpl });
@@ -324,7 +332,17 @@ const expectedProps = {
 
   await client.associateContactToCompany("1001", "3001");
   const assoc = fetchImpl.calls[4];
-  pass("T9 associate contact→company via PUT", assoc.method === "PUT" && assoc.url.includes("/contacts/1001/associations/companies/3001"), `${assoc.method} ${assoc.url}`);
+  pass("T9 associate contact→company via typed PUT /279", assoc.method === "PUT" && assoc.url.includes("/contacts/1001/associations/companies/3001/279"), `${assoc.method} ${assoc.url}`);
+
+  const assocRead = await client.readContactCompanyAssociations(["1001", "9999"]);
+  pass(
+    "T9 readContactCompanyAssociations maps to→ids and exposes no-association errors",
+    Boolean(
+      assocRead.byContact.get("1001")?.includes("3001") &&
+        assocRead.errors.some((e) => e.id === "9999")
+    ),
+    `map=${JSON.stringify([...assocRead.byContact])} errs=${JSON.stringify(assocRead.errors)}`
+  );
 }
 
 // --- T10: mock remains the default (no CRM_PROVIDER) --------------------------
