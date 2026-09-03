@@ -203,6 +203,14 @@ export interface CrmLead {
   serviceRequested: string;
   status: string;
   score: string;
+  /** Numeric 0–100 from the scoring rubric (scope §3.1 → HubSpot `lf_lead_score`). */
+  scoreValue?: number;
+  /** Rubric classification: HOT/WARM/COLD/UNQUALIFIED/HUMAN_REVIEW (→ `lf_classification`). */
+  classification?: string;
+  /** Follow-up opt-out marker: 1 = opted out (→ `lf_opted_out`). */
+  optedOut?: number;
+  /** Lead's location / service area (→ `lf_location`). */
+  location?: string;
 }
 
 export interface CrmProvider {

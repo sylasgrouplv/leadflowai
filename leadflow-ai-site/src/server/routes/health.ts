@@ -3,7 +3,7 @@
  *
  *   GET /api/health/system   owner | admin
  *
- * Live status per service: AI API, Database, Calendar, SMS, Email, Stripe,
+ * Live status per service: AI API, Database, Calendar, SMS, Email, CRM, Stripe,
  * Automation Queue — each CONNECTED/HEALTHY or ACTION REQUIRED.
  *
  * Provider checks reflect the PROVIDER INTERFACE status honestly:
@@ -59,7 +59,7 @@ function providerCheck(id: string, label: string, provider: string, key: string)
     status: "ACTION REQUIRED",
     kind: "action",
     provider,
-    detail: `${provider} provider selected but no API key configured — set the ${id === "ai" ? "AI_API_KEY" : id === "sms" ? "SMS_API_KEY" : id === "email" ? "EMAIL_API_KEY" : id === "calendar" ? "CALENDAR_API_KEY" : id === "stripe" ? "STRIPE_API_KEY" : "API_KEY"} environment variable.`,
+    detail: `${provider} provider selected but no API key configured — set the ${id === "ai" ? "AI_API_KEY" : id === "sms" ? "SMS_API_KEY" : id === "email" ? "EMAIL_API_KEY" : id === "calendar" ? "CALENDAR_API_KEY" : id === "crm" ? "HUBSPOT_API_KEY" : id === "stripe" ? "STRIPE_API_KEY" : "API_KEY"} environment variable.`,
   };
 }
 
@@ -102,6 +102,7 @@ healthRoutes.get("/system", async (c) => {
   const calendar = providerCheck("calendar", "Calendar", env.calendarProvider, env.calendarApiKey);
   const sms = providerCheck("sms", "SMS", env.smsProvider, env.smsApiKey);
   const email = providerCheck("email", "Email", env.emailProvider, env.emailApiKey);
+  const crm = providerCheck("crm", "CRM", env.crmProvider, env.hubspotApiKey);
   const stripe = providerCheck("stripe", "Stripe", env.stripeProvider, env.stripeApiKey);
 
   // 3) Automation queue — failed/stuck runs in the last 7 days.
@@ -146,7 +147,7 @@ healthRoutes.get("/system", async (c) => {
     };
   }
 
-  const services: HealthService[] = [ai, dbStatus, calendar, sms, email, stripe, queue];
+  const services: HealthService[] = [ai, dbStatus, calendar, sms, email, crm, stripe, queue];
   const anyAction = services.some((sv) => sv.status === "ACTION REQUIRED");
   return c.json({
     services,

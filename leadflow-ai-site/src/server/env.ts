@@ -34,6 +34,18 @@ export const env = {
   get crmProvider() {
     return process.env.CRM_PROVIDER || "mock";
   },
+  /** HubSpot Private App access token (CRM_PROVIDER=hubspot). */
+  get hubspotApiKey() {
+    return process.env.HUBSPOT_API_KEY || "";
+  },
+  /** HubSpot Private App id (webhook subscription management — Phase 2). */
+  get hubspotAppId() {
+    return process.env.HUBSPOT_APP_ID || "";
+  },
+  /** HubSpot Private App client secret (webhook signature verification — Phase 2). */
+  get hubspotAppSecret() {
+    return process.env.HUBSPOT_APP_SECRET || "";
+  },
   get stripeProvider() {
     return process.env.STRIPE_PROVIDER || "mock";
   },
