@@ -52,6 +52,7 @@ export const reviews = activeSchema.reviews;
 export const usageEvents = activeSchema.usageEvents;
 export const businessReports = activeSchema.businessReports;
 export const platformSettings = activeSchema.platformSettings;
+export const syncState = activeSchema.syncState;
 
 // --- constants (identical in both modules) ---------------------------------
 export const USER_ROLES = activeSchema.USER_ROLES;
@@ -79,6 +80,9 @@ export const AUTOMATION_RUN_STATUSES = activeSchema.AUTOMATION_RUN_STATUSES;
 export const REVIEW_SENTIMENTS = activeSchema.REVIEW_SENTIMENTS;
 export const USAGE_KINDS = activeSchema.USAGE_KINDS;
 export const USAGE_DIRECTIONS = activeSchema.USAGE_DIRECTIONS;
+export const SYNC_DIRECTIONS = activeSchema.SYNC_DIRECTIONS;
+export const SYNC_STATUSES = activeSchema.SYNC_STATUSES;
+export const SYNC_ENTITIES = activeSchema.SYNC_ENTITIES;
 
 // --- types (identical in both modules) -------------------------------------
 export type UserRole = (typeof USER_ROLES)[number];
@@ -95,3 +99,6 @@ export type AutomationRunStatus = (typeof AUTOMATION_RUN_STATUSES)[number];
 export type ReviewSentiment = (typeof REVIEW_SENTIMENTS)[number];
 export type UsageKind = (typeof USAGE_KINDS)[number];
 export type UsageDirection = (typeof USAGE_DIRECTIONS)[number];
+export type SyncDirection = (typeof SYNC_DIRECTIONS)[number];
+export type SyncStatus = (typeof SYNC_STATUSES)[number];
+export type SyncEntity = (typeof SYNC_ENTITIES)[number];

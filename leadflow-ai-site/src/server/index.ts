@@ -29,6 +29,7 @@ import { runAutomationEngine } from "./automations/engine";
 import { runWeeklyReportJob } from "./bi/report";
 import { runDailyOpsReportJob } from "./bi/outreach";
 import { runSocialPostScheduler } from "./social/engine";
+import { runHubSpotSync } from "./crm/sync";
 import { env } from "./env";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
@@ -68,6 +69,15 @@ export async function createApp() {
     const weeklyReports = await runWeeklyReportJob();
     const dailyOpsReports = await runDailyOpsReportJob();
     const socialPosts = await runSocialPostScheduler();
+    const hubSpotSync = await runHubSpotSync().catch((e) => ({
+      ok: false,
+      skipped: "",
+      inbound: null,
+      outbound: null,
+      errors: 1,
+      durationMs: 0,
+      error: e instanceof Error ? e.message : String(e),
+    }));
     return c.json({
       ok: true,
       automation: {
@@ -83,6 +93,7 @@ export async function createApp() {
       weeklyReports,
       dailyOpsReports,
       socialPosts,
+      hubSpotSync,
       time: Date.now(),
     });
   });

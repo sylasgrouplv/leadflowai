@@ -732,3 +732,50 @@ export const platformSettings = pgTable("platform_settings", {
   valueJson: text("value_json").notNull().default("{}"),
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 }, (t) => [uniqueIndex("platform_settings_key_idx").on(t.key)]);
+
+// ---------------------------------------------------------------------------
+// CRM two-way sync — per-direction cursor state (HubSpot ↔ ctomail, Phase 1
+// task 2)
+// ---------------------------------------------------------------------------
+
+/** Sync directions for the two-way CRM sync (sync_state.direction). */
+export const SYNC_DIRECTIONS = ["inbound", "outbound"] as const;
+export type SyncDirection = (typeof SYNC_DIRECTIONS)[number];
+/** Sync lifecycle: idle (never run / reset), ok (last run clean), error. */
+export const SYNC_STATUSES = ["idle", "ok", "error"] as const;
+export type SyncStatus = (typeof SYNC_STATUSES)[number];
+/** Entity types carried by the CRM sync (sync_state.entity). */
+export const SYNC_ENTITIES = ["contacts", "companies", "leads", "deals"] as const;
+export type SyncEntity = (typeof SYNC_ENTITIES)[number];
+
+/**
+ * Per-direction sync cursor/watermark (one row per provider+direction+entity).
+ * Cursors are portal-level (NOT business_id-scoped): the HubSpot portal is a
+ * company-level resource — one portal holds prospect + dogfood records across
+ * tenants (see hubspot-import.ts) — so per-tenant isolation does not apply to
+ * the watermark itself. The job (src/server/crm/sync.ts) reads the cursor,
+ * processes changes strictly after it through idempotent email-keyed upserts,
+ * then advances it; safe to run repeatedly.
+ */
+export const syncState = pgTable("sync_state", {
+  id: text("id").primaryKey(),
+  /** Connector name, e.g. "hubspot" (matches CRM_PROVIDER value). */
+  provider: text("provider").notNull(),
+  /** inbound (HubSpot -> LeadFlow) | outbound (LeadFlow -> HubSpot). */
+  direction: text("direction").notNull(),
+  /** Entity carried by this cursor: contacts | companies | leads | deals. */
+  entity: text("entity").notNull(),
+  /** Wall clock of the last COMPLETED run (epoch ms); null = never ran. */
+  lastSyncAt: bigint("last_sync_at", { mode: "number" }),
+  /** Provider watermark: epoch-ms string for timestamp cursors, or an opaque
+   *  paging token for keyset cursors (text so either fits). Null = from start. */
+  lastCursor: text("last_cursor"),
+  /** idle | ok | error (last run's outcome). */
+  status: text("status").notNull().default("idle"),
+  /** Last failure message; null when ok. Cleared on the next clean run. */
+  error: text("error"),
+  /** Small run-counter blob: { pushed, pulled, skipped, errors, runs }. */
+  metaJson: text("meta_json").notNull().default("{}"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+}, (t) => [uniqueIndex("sync_state_provider_direction_entity_idx").on(t.provider, t.direction, t.entity)]);
