@@ -229,7 +229,9 @@ export async function repurposeContent(businessId: string, input: RepurposeInput
     const full = `${draft.body}\n\n${draft.label}`;
     const row = await repo.createContentPiece(businessId, {
       sourceType: SOCIAL_DRAFT_SOURCE_TYPE,
-      sourceRef: sourcePieceId,
+      // sourcePieceId is always set here (created above when absent); the
+      // `?? ""` just satisfies the optional-string field type (TS2322).
+      sourceRef: sourcePieceId ?? "",
       title: `${draft.platform} draft — ${sourceTitle}`,
       body: full,
       status: "draft",

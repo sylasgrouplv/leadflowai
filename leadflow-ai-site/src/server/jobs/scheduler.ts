@@ -30,10 +30,25 @@ import { runAutomationEngine } from "../automations/engine";
 import { runWeeklyReportJob } from "../bi/report";
 import { runDailyOpsReportJob } from "../bi/outreach";
 import { runSocialPostScheduler } from "../social/engine";
+import { runHubSpotSync, getSyncState, HUBSPOT_SYNC_PROVIDER } from "../crm/sync";
 
 const INTERVAL_MS = Number(process.env.AUTOMATION_INTERVAL_MS || process.env.FOLLOWUP_INTERVAL_MS || 60_000);
+/**
+ * HubSpot sync cadence (Phase 1 task 2): the watermark job runs every tick
+ * like the other connectors. HUBSPOT_SYNC_MIN_INTERVAL_MS (default 15 min)
+ * is enforced inside runHubSpotSync via the sync_state watermark, so two
+ * overlapping processes still pace the portal-level calls; a tick that
+ * arrives early is a cheap no-op (one small SELECT per direction).
+ */
+const HUBSPOT_SYNC_MIN_INTERVAL_MS = Number(process.env.HUBSPOT_SYNC_MIN_INTERVAL_MS || 15 * 60_000);
 
 let started = false;
+
+/** Cheap gate: skip the sync pass when its watermark is fresher than the cadence. */
+function hubSpotSyncDue(state: { lastSyncAt: number | null } | null): boolean {
+  if (!state?.lastSyncAt) return true; // never ran -> due immediately
+  return Date.now() - state.lastSyncAt >= HUBSPOT_SYNC_MIN_INTERVAL_MS;
+}
 
 export function startSchedulers(): void {
   if (started) return;
@@ -69,6 +84,25 @@ export function startSchedulers(): void {
       }
     } catch (e) {
       console.error("[scheduler] social post scheduler run failed:", e);
+    }
+    try {
+      // HubSpot two-way sync (Phase 1 task 2): both directions through the
+      // sync_state watermarks. Not configured (CRM_PROVIDER != hubspot or no
+      // key) is a graceful skip inside the job. Gated to the 15-min cadence.
+      const inState = await getSyncState(HUBSPOT_SYNC_PROVIDER, "inbound", "contacts");
+      const outState = await getSyncState(HUBSPOT_SYNC_PROVIDER, "outbound", "contacts");
+      if (hubSpotSyncDue(inState) || hubSpotSyncDue(outState)) {
+        const run = await runHubSpotSync();
+        if (run.skipped) {
+          // Not configured — stay silent (the default every deploy today).
+        } else {
+          console.log(
+            `[scheduler] hubspot sync: ok=${run.ok} pulled=${run.inbound?.pulled ?? 0} (created=${run.inbound?.created ?? 0}, updated=${run.inbound?.updated ?? 0}, skipped=${run.inbound?.skipped ?? 0}) pushed=${run.outbound?.pushed ?? 0} errors=${run.errors} in=${run.durationMs}ms`
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[scheduler] hubspot sync run failed:", e);
     }
   };
 
