@@ -38,7 +38,7 @@
  * unmatched rows are counted and skipped, never misfiled into another
  * business.
  */
-import { and, asc, eq, gt, inArray, ne } from "drizzle-orm";
+import { and, asc, eq, gt, ne } from "drizzle-orm";
 import { env } from "../env";
 import { getDb } from "../db/client";
 import * as s from "../db/schema";
@@ -270,22 +270,149 @@ export interface InboundResult {
   lastErrorMessage: string;
 }
 
-export async function pullHubSpotContacts(client: HubSpotClient, cursorFrom: string | null): Promise<InboundResult> {
+/**
+ * Single-record inbound upsert — the SHARED write path for "HubSpot contact
+ * → local lead" used by BOTH the polling pull (`pullHubSpotContacts`, one row
+ * per query) and the webhook receiver (`crm/webhooks.ts`, one row per event).
+ * Any change to the inbound mapping semantics goes here, never in the
+ * callers — that is the single-source-of-truth guarantee.
+ *
+ * Email-keyed, diff-guarded: creates the row under the dogfood tenant when
+ * absent, PATCHes only fields that actually differ (writing identical state
+ * back would bump updated_at and ping-pong with the outbound push). Returns
+ * "created" | "updated" | "noop" (noop = row already identical).
+ */
+export async function upsertInboundPlan(
+  plan: InboundPlan,
+  bizId: string
+): Promise<"created" | "updated" | "noop"> {
   const db = getDb();
+  const existingRows = await db
+    .select()
+    .from(s.leads)
+    .where(and(eq(s.leads.businessId, bizId), eq(s.leads.email, plan.email)))
+    .limit(1)
+    .execute();
+  const existing = existingRows[0] as typeof s.leads.$inferSelect | undefined;
+  if (!existing) {
+    await db.insert(s.leads).values({
+      id: crypto.randomUUID(),
+      businessId: bizId,
+      firstName: plan.firstName,
+      lastName: plan.lastName,
+      phone: plan.phone,
+      email: plan.email,
+      source: "hubspot_sync",
+      serviceRequested: plan.serviceRequested,
+      location: plan.location,
+      ...(plan.status ? { status: plan.status } : {}),
+      ...(plan.classification ? { classification: plan.classification } : {}),
+      ...(plan.scoreValue !== null ? { scoreValue: plan.scoreValue, score: plan.scoreValue >= 70 ? "hot" : plan.scoreValue >= 40 ? "warm" : "cold" } : {}),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }).execute();
+    return "created";
+  }
+  // Diff-guard: patch ONLY fields that actually differ. Writing the
+  // same value back would bump updated_at, which the outbound push
+  // would then re-send to HubSpot, which would bump
+  // hs_lastmodifieddate for the next inbound pull — a low-grade
+  // infinite loop. Identical state must be a no-op on both sides.
+  const patch: Record<string, unknown> = {};
+  const textFields: [string, string][] = [
+    ["firstName", plan.firstName],
+    ["lastName", plan.lastName],
+    ["phone", plan.phone],
+    ["serviceRequested", plan.serviceRequested],
+    ["location", plan.location],
+  ];
+  for (const [col, incoming] of textFields) {
+    const cur = norm((existing as Record<string, unknown>)[col]);
+    if (incoming && incoming !== cur) patch[col] = incoming;
+  }
+  if (plan.status && plan.status !== existing.status) patch.status = plan.status;
+  if (plan.classification && plan.classification !== existing.classification) patch.classification = plan.classification;
+  if (plan.scoreValue !== null && plan.scoreValue !== existing.scoreValue) patch.scoreValue = plan.scoreValue;
+  if (Object.keys(patch).length === 0) return "noop";
+  patch.updatedAt = Date.now();
+  await db.update(s.leads).set(patch).where(and(eq(s.leads.id, existing.id), eq(s.leads.businessId, bizId))).execute();
+  return "updated";
+}
+
+/** Resolve the dogfood tenant id inbound rows are filed under (portal-level sync). */
+export async function getDogfoodBusinessId(): Promise<string> {
+  const bizRows = await getDb()
+    .select()
+    .from(s.businesses)
+    .where(eq(s.businesses.name, DOGFOOD_BUSINESS_NAME))
+    .limit(1)
+    .execute();
+  const biz = bizRows[0];
+  if (!biz) {
+    throw new Error(`dogfood tenant '${DOGFOOD_BUSINESS_NAME}' not found — cannot file inbound contacts`);
+  }
+  return biz.id;
+}
+
+/**
+ * Full single-record inbound pipeline: map a HubSpot contact → upsert into
+ * the dogfood tenant. The webhook receiver calls this per event (returned
+ * "skipped" when the contact has no email dedupe key). The polling pull
+ * batches the same work inline for query efficiency (one email-index query
+ * per page) but writes through the identical `upsertInboundPlan`.
+ */
+export async function upsertInboundContact(contact: HubSpotObject): Promise<"created" | "updated" | "noop" | "skipped"> {
+  const plan = mapHubSpotContactToInbound(contact);
+  if (!plan.ok) return "skipped";
+  const bizId = await getDogfoodBusinessId();
+  return upsertInboundPlan(plan, bizId);
+}
+
+/**
+ * HubSpot-side deletion → local flag/archive. NEVER hard-deletes: marks the
+ * email-matched lead opted-out (channel "all", stops all follow-up per the
+ * spec §9 stop rule) and appends a deletion marker to `notes`. A no-email
+ * contact or an unmatched email is a no-op ("skipped").
+ */
+export async function flagInboundDeletion(email: string): Promise<"flagged" | "noop" | "skipped"> {
+  const key = norm(email).toLowerCase();
+  if (!key) return "skipped";
+  const db = getDb();
+  const bizId = await getDogfoodBusinessId();
+  const rows = await db
+    .select()
+    .from(s.leads)
+    .where(and(eq(s.leads.businessId, bizId), eq(s.leads.email, key)))
+    .limit(1)
+    .execute();
+  const existing = rows[0] as typeof s.leads.$inferSelect | undefined;
+  if (!existing) return "skipped";
+  const alreadyFlagged = existing.optedOut === 1 && norm(existing.notes).includes("[hubspot deleted]");
+  if (alreadyFlagged) return "noop";
+  const marker = `[hubspot deleted ${new Date().toISOString().slice(0, 10)}]`;
+  await db
+    .update(s.leads)
+    .set({
+      optedOut: 1,
+      optOutChannel: "all",
+      notes: norm(existing.notes) ? `${norm(existing.notes)} ${marker}` : marker,
+      updatedAt: Date.now(),
+    })
+    .where(and(eq(s.leads.id, existing.id), eq(s.leads.businessId, bizId)))
+    .execute();
+  return "flagged";
+}
+
+export async function pullHubSpotContacts(client: HubSpotClient, cursorFrom: string | null): Promise<InboundResult> {
   // On the first run start at a 7-day backstop rather than the portal's full
   // history (the one-time backfill import already covered history — PR #26).
   const fromMs = cursorFrom ? Number(cursorFrom) : Date.now() - INITIAL_WINDOW_MS;
-  const cursorTo = String(Date.now());
   const result: InboundResult = { cursorFrom, cursorTo: cursorFrom, pulled: 0, created: 0, updated: 0, skipped: 0, errors: 0, lastErrorMessage: "" };
 
   // The portal-level tenant inbound rows are filed under (the "LeadFlow AI"
   // dogfood tenant; rows whose email matches no lead in it are created there,
   // never misfiled into another business).
-  const bizRows = await db.select().from(s.businesses).where(eq(s.businesses.name, DOGFOOD_BUSINESS_NAME)).limit(1).execute();
-  const biz = bizRows[0];
-  if (!biz) {
-    throw new Error(`dogfood tenant '${DOGFOOD_BUSINESS_NAME}' not found — cannot file inbound contacts`);
-  }
+  const bizId = await getDogfoodBusinessId();
 
   // Page HubSpot contacts strictly after the watermark (hs_lastmodifieddate).
   let after: string | undefined;
@@ -301,13 +428,8 @@ export async function pullHubSpotContacts(client: HubSpotClient, cursorFrom: str
     });
     const contacts = searchRes.results;
     if (contacts.length === 0) break;
-    // Local email index for this page (one query, then per-row upserts).
-    type LeadRow = typeof s.leads.$inferSelect;
-    const emails = contacts.map((c) => norm(c.properties?.email).toLowerCase()).filter(Boolean);
-    const existingRows: LeadRow[] = emails.length
-      ? await db.select().from(s.leads).where(and(eq(s.leads.businessId, biz.id), inArray(s.leads.email, emails))).execute()
-      : [];
-    const byEmail = new Map<string, LeadRow>(existingRows.map((l): [string, LeadRow] => [norm(l.email).toLowerCase(), l]));
+    // Every row writes through the SHARED upsertInboundPlan — the same write
+    // path the webhook receiver uses (single source of truth).
     for (const contact of contacts) {
       const plan = mapHubSpotContactToInbound(contact);
       if (!plan.ok) {
@@ -318,52 +440,13 @@ export async function pullHubSpotContacts(client: HubSpotClient, cursorFrom: str
       if (modified && modified > newestSeen) newestSeen = modified;
       result.pulled += 1;
       try {
-        const existing = byEmail.get(plan.email);
-        if (!existing) {
-          await db.insert(s.leads).values({
-            id: crypto.randomUUID(),
-            businessId: biz.id,
-            firstName: plan.firstName,
-            lastName: plan.lastName,
-            phone: plan.phone,
-            email: plan.email,
-            source: "hubspot_sync",
-            serviceRequested: plan.serviceRequested,
-            location: plan.location,
-            ...(plan.status ? { status: plan.status } : {}),
-            ...(plan.classification ? { classification: plan.classification } : {}),
-            ...(plan.scoreValue !== null ? { scoreValue: plan.scoreValue, score: plan.scoreValue >= 70 ? "hot" : plan.scoreValue >= 40 ? "warm" : "cold" } : {}),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          }).execute();
-          result.created += 1;
-        } else {
-          // Diff-guard: patch ONLY fields that actually differ. Writing the
-          // same value back would bump updated_at, which the outbound push
-          // would then re-send to HubSpot, which would bump
-          // hs_lastmodifieddate for the next inbound pull — a low-grade
-          // infinite loop. Identical state must be a no-op on both sides.
-          const patch: Record<string, unknown> = {};
-          const textFields: [string, string][] = [
-            ["firstName", plan.firstName],
-            ["lastName", plan.lastName],
-            ["phone", plan.phone],
-            ["serviceRequested", plan.serviceRequested],
-            ["location", plan.location],
-          ];
-          for (const [col, incoming] of textFields) {
-            const cur = norm((existing as Record<string, unknown>)[col]);
-            if (incoming && incoming !== cur) patch[col] = incoming;
-          }
-          if (plan.status && plan.status !== existing.status) patch.status = plan.status;
-          if (plan.classification && plan.classification !== existing.classification) patch.classification = plan.classification;
-          if (plan.scoreValue !== null && plan.scoreValue !== existing.scoreValue) patch.scoreValue = plan.scoreValue;
-          if (Object.keys(patch).length > 0) {
-            patch.updatedAt = Date.now();
-            await db.update(s.leads).set(patch).where(and(eq(s.leads.id, existing.id), eq(s.leads.businessId, biz.id))).execute();
-            result.updated += 1;
-          }
-        }
+        // Single write path (same as the webhook receiver); the outcome
+        // drives the counters. No page-local read cache: a duplicate email
+        // inside one page hits the diff-guard on the second copy and is a
+        // no-op rather than a double-create attempt.
+        const outcome = await upsertInboundPlan(plan, bizId);
+        if (outcome === "created") result.created += 1;
+        else if (outcome === "updated") result.updated += 1;
       } catch (e) {
         result.errors += 1;
         if (!result.lastErrorMessage) result.lastErrorMessage = e instanceof Error ? e.message : String(e);

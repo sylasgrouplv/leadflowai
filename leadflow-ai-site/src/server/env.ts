@@ -46,6 +46,15 @@ export const env = {
   get hubspotAppSecret() {
     return process.env.HUBSPOT_APP_SECRET || "";
   },
+  /**
+   * HubSpot webhook verification secret (POST /api/webhooks/hubspot).
+   * Set to the Private App's client secret: HubSpot signs each batch with
+   * `X-HubSpot-Signature` = SHA-256 hex of `secret + rawBody`. Empty =
+   * accept-unsigned dev/dogfood default (logged); production MUST set it.
+   */
+  get hubspotWebhookSecret() {
+    return process.env.HUBSPOT_WEBHOOK_SECRET || process.env.HUBSPOT_APP_SECRET || "";
+  },
   get stripeProvider() {
     return process.env.STRIPE_PROVIDER || "mock";
   },

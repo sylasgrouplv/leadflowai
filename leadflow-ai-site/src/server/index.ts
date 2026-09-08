@@ -30,6 +30,7 @@ import { runWeeklyReportJob } from "./bi/report";
 import { runDailyOpsReportJob } from "./bi/outreach";
 import { runSocialPostScheduler } from "./social/engine";
 import { runHubSpotSync } from "./crm/sync";
+import { hubspotWebhookRoutes } from "./crm/webhooks";
 import { env } from "./env";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
@@ -118,6 +119,7 @@ export async function createApp() {
   app.route("/api/reports", reportRoutes);
   app.route("/api/import", importRoutes);
   app.route("/api/social", socialRoutes);
+  app.route("/api/webhooks", hubspotWebhookRoutes);
 
   app.notFound((c) => c.json({ error: "Not found" }, 404));
 
