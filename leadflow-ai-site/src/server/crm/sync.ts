@@ -387,7 +387,7 @@ export async function flagInboundDeletion(email: string): Promise<"flagged" | "n
     .execute();
   const existing = rows[0] as typeof s.leads.$inferSelect | undefined;
   if (!existing) return "skipped";
-  const alreadyFlagged = existing.optedOut === 1 && norm(existing.notes).includes("[hubspot deleted]");
+  const alreadyFlagged = existing.optedOut === 1 && norm(existing.notes).includes("[hubspot deleted");
   if (alreadyFlagged) return "noop";
   const marker = `[hubspot deleted ${new Date().toISOString().slice(0, 10)}]`;
   await db

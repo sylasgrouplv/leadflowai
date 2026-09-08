@@ -231,7 +231,7 @@ function fakeClient(byId: Record<string, HubSpotObject>) {
   const f = flagged as (typeof s.leads.$inferSelect) | undefined;
   pass(
     "deletion: opted-out (channel all) + marker, row NOT deleted",
-    f !== undefined && f.optedOut === 1 && f.optOutChannel === "all" && String(f.notes).includes("[hubspot deleted]")
+    f !== undefined && f.optedOut === 1 && f.optOutChannel === "all" && String(f.notes).includes("[hubspot deleted")
   );
   // Re-flag is a diff-guard noop.
   const d2 = await processHubSpotWebhookEvents(client, [
