@@ -50,6 +50,7 @@
  */
 import { HubSpotClient } from "./src/server/integrations/hubspot";
 import type { HubSpotProperties, HubSpotObject } from "./src/server/integrations/hubspot";
+import { isSharedWebHost, companyKeyFor } from "./src/server/crm/hubspot-import-keys";
 import { writeFileSync, mkdirSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
@@ -169,7 +170,10 @@ function rowToProspect(row: Record<string, string>, csvFile: string): Prospect {
   const email = norm(row.email ?? "").toLowerCase();
   const nameKey = `${normNameKey(businessName)}|${cityState}`;
   const importKey = email || nameKey;
-  const companyKey = domain ? `domain:${domain}` : `name:${normNameKey(businessName)}|${cityState}`;
+  // Shared platform hosts (sites.google.com, facebook.com, …) are not unique
+  // to a business — keying on them merges distinct businesses into one
+  // company. Those rows fall back to the per-business name|city|state key.
+  const companyKey = companyKeyFor(domain, `${normNameKey(businessName)}|${cityState}`);
   return {
     businessName,
     trade,
@@ -199,7 +203,9 @@ function rowToProspect(row: Record<string, string>, csvFile: string): Prospect {
 
 function companyProperties(p: Prospect): HubSpotProperties {
   const props: HubSpotProperties = { name: p.businessName };
-  if (p.domain) props.domain = p.domain;
+  // Never write a shared platform host as the company domain — it belongs to
+  // the platform, not the business, and would poison future domain dedupe.
+  if (p.domain && !isSharedWebHost(p.domain)) props.domain = p.domain;
   if (p.phone) props.phone = p.phone;
   if (p.address) props.address = p.address;
   if (p.city) props.city = p.city;
@@ -421,9 +427,11 @@ async function main() {
 
   for (const p of unique) {
     // --- company resolution ---
+    // A shared platform host must never resolve an existing company: matching
+    // on it would attach this business to another business's company record.
     let companyId = "";
     let companyCreated = false;
-    const byDomain = p.domain ? companiesByDomain.get(p.domain) : undefined;
+    const byDomain = p.domain && !isSharedWebHost(p.domain) ? companiesByDomain.get(p.domain) : undefined;
     const byName = companiesByName.get(normNameKey(p.businessName));
     if (byDomain) {
       companyId = byDomain.id;
@@ -549,11 +557,13 @@ async function main() {
     }
   }
 
-  // Company PATCHes for domain enrichment (name-matched company missing domain)
+  // Company PATCHes for domain enrichment (name-matched company missing domain).
+  // Shared platform hosts are skipped — writing one as `domain` would corrupt
+  // the company record and future domain dedupe.
   let companiesUpdated = 0;
   if (!dryRun) {
     for (const p of unique) {
-      if (!p.domain) continue;
+      if (!p.domain || isSharedWebHost(p.domain)) continue;
       const plan = companyPlan.get(p.companyKey);
       if (!plan || plan.created || !plan.companyId) continue;
       try {
