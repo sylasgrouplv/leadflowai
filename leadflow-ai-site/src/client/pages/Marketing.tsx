@@ -10,7 +10,7 @@ export function PricingPage() {
   usePageTitle("Pricing — LeadFlow AI");
 
   const monthlyNote =
-    "All plans are billed monthly. Every plan starts with a free trial and a one-time setup fee of $1,500–$3,000 based on your business's needs.";
+    "All plans are billed monthly. Every plan starts with a card-required 14-day free trial ($0 charged during the trial) and a one-time setup fee of $1,500.";
 
   return (
     <PageShell>
@@ -69,7 +69,7 @@ export function PricingPage() {
 
           <div className="mt-14 grid gap-4 sm:grid-cols-3">
             {[
-              { t: "Free trial first", d: "Every account starts free — no credit card required. Try the full product and the Smith's HVAC demo before paying." },
+              { t: "Free trial first", d: "Every account starts with a 14-day trial and a card on file. $0 is charged during the trial, and if you cancel before it ends you're never charged." },
               { t: "One-time setup", d: SETUP_FEE_NOTE.split("Then a flat monthly subscription")[0] },
               { t: "Cancel anytime", d: "Monthly billing with no long-term contract. Stop whenever you like." },
             ].map((x) => (
@@ -199,7 +199,8 @@ export function FeaturesPage() {
             <h3 className="text-xl font-bold tracking-tight text-slate-900">See it working before you set anything up</h3>
             <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-slate-600">
               Every account includes the Smith's HVAC demo business — a fully working example with sample services,
-              leads, and AI conversations. Explore it free, no credit card.
+              leads, and AI conversations. Explore it during your 14-day free trial: card required to start, $0 charged
+              during the trial, cancel before it ends and you're never charged.
             </p>
             <Link
               to="/signup"
@@ -310,7 +311,8 @@ export function ContactPage() {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
               <p className="text-sm font-semibold text-slate-900">Prefer to try first?</p>
               <p className="mt-1 text-sm leading-relaxed text-slate-500">
-                Create a free account and explore the Smith's HVAC demo — no credit card needed.
+                Start your 14-day free trial and explore the Smith's HVAC demo — card required to start, $0 charged
+                during the trial, cancel before it ends and you're never charged.
               </p>
               <Link to="/signup" className="mt-3 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-500">
                 Start Free →

@@ -1,10 +1,11 @@
 /** App shell — sidebar navigation + topbar + routed content. */
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useState, type ReactNode } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "../App";
 import { api, type TrialStateName } from "../api";
-import { ButtonLink, Card, cx } from "../components/ui";
+import { ButtonLink, Card, Spinner, cx } from "../components/ui";
 import { NotificationsBell } from "../components/NotificationsBell";
+import { TrialCardStep } from "./TrialCard";
 
 interface NavItem {
   to: string;
@@ -168,11 +169,13 @@ function Logo({ dark }: { dark?: boolean }) {
  * (currentPeriodEnd === null — the demo tenant and legacy rows) never reach
  * this screen: a null clock means "never expires".
  *
- * There is no checkout URL to link to (no Stripe checkout exists for the
- * self-serve plan yet), so the CTA points at the public pricing page and the
- * customer can re-subscribe by talking to the team.
+ * The trial requires a card (BUILD 2), so the copy tells the truth about the
+ * card on file: cancelling before the end means never being charged; letting it
+ * run means the first month is due. There is no checkout URL to link to here,
+ * so the CTA points at the public pricing page and the customer can re-subscribe
+ * by talking to the team.
  */
-function TrialEnded({ state }: { state: TrialStateName }) {
+function TrialEnded({ state, cardOnFile }: { state: TrialStateName; cardOnFile: boolean }) {
   const canceled = state === "canceled";
   return (
     <div className="mx-auto max-w-2xl py-6">
@@ -187,8 +190,10 @@ function TrialEnded({ state }: { state: TrialStateName }) {
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-slate-600">
           {canceled
-            ? "You canceled before the trial ended, so nothing was charged — the 14-day trial is free and we never took a card."
-            : "Your 14-day free trial has ended. Nothing was charged: the trial is free and we never took a card."}
+            ? "You ended the trial before it was over, so you were never charged — the card you added was only there for the first month if you kept going."
+            : cardOnFile
+              ? "Your 14-day free trial has ended, so your plan's first month is now due on the card you added. Nothing was charged during the trial itself."
+              : "Your 14-day free trial has ended. No card was on file for this account, so nothing was charged."}
         </p>
         <p className="mt-3 text-sm leading-relaxed text-slate-600">
           Your account, leads, and conversations are still here. Subscribe to switch the automation back on, or get in
@@ -200,20 +205,63 @@ function TrialEnded({ state }: { state: TrialStateName }) {
             Contact our team to re-subscribe
           </Link>
         </div>
-        <p className="mt-5 text-xs text-slate-400">No charges are made until you subscribe to a plan.</p>
+        <p className="mt-5 text-xs text-slate-400">
+          {canceled
+            ? "No charges were made, and none are scheduled."
+            : cardOnFile
+              ? "One month of your plan is due at the end of the trial; nothing was charged during it."
+              : "No card was on file, so no charge could be made."}
+        </p>
       </Card>
     </div>
   );
 }
 
 export function AppShell() {
-  const { user, business, subscription, refresh, logout } = useAuth();
+  const { user, business, subscription, refresh, logout, billing } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [cancelingTrial, setCancelingTrial] = useState(false);
+  // Returning from the provider's checkout: /app?trial_session=<id> is verified
+  // exactly once, then the query string is cleared so a refresh cannot
+  // re-confirm the same session.
+  const trialSession = new URLSearchParams(location.search).get("trial_session");
+  const [confirmingCard, setConfirmingCard] = useState(!!trialSession);
+  const [cardError, setCardError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!trialSession) return;
+    let alive = true;
+    (async () => {
+      try {
+        await api("/api/billing/trial-confirm", {
+          method: "POST",
+          body: JSON.stringify({ sessionId: trialSession }),
+        });
+        await refresh();
+      } catch (e) {
+        if (alive) {
+          setCardError(e instanceof Error ? e.message : "We couldn't confirm your card — please try again.");
+        }
+      } finally {
+        if (alive) {
+          setConfirmingCard(false);
+          navigate(location.pathname, { replace: true });
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [trialSession]);
   // The free-trial clock (13: null = no clock set, i.e. the account never expires).
   const trial = subscription?.trialState ?? null;
   const trialWasReal = subscription?.currentPeriodEnd != null;
   const trialOver = trialWasReal && (trial?.state === "expired" || trial?.state === "canceled");
+  // Card-gated trial (BUILD 2): a running trial with no card on file is not
+  // usable until the card step is completed. Accounts with no trial clock (the
+  // demo tenant, legacy rows) are never gated, and once the trial is over the
+  // TrialEnded screen takes priority.
+  const needsCard = !!business && trialWasReal && !trialOver && subscription?.cardOnFile !== true;
   const planLabel = subscription?.plan ? subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1) : "Starter";
   const days = trial?.daysLeft ?? 0;
   const pill = !trial || trial.state === "active"
@@ -228,7 +276,12 @@ export function AppShell() {
   // Owners can end the free trial early; employees never see billing controls.
   const canCancelTrial = user?.role === "owner" && !!trial && trial.trialEndsAt !== null && !trialOver;
   const handleCancelTrial = async () => {
-    if (!window.confirm("End your free trial now? The trial is free, so you will not be charged.")) return;
+    if (
+      !window.confirm(
+        "End your free trial now? It stops immediately, and because you're canceling before the trial ends you're never charged. Your data stays saved."
+      )
+    )
+      return;
     setCancelingTrial(true);
     try {
       await api("/api/business/cancel-trial", { method: "POST" });
@@ -321,7 +374,15 @@ export function AppShell() {
           </div>
         </header>
         <main className="flex-1 px-6 py-6 lg:px-8">
-          {trialOver && trial ? <TrialEnded state={trial.state} /> : <Outlet />}
+          {confirmingCard ? (
+            <Spinner label="Confirming your card…" />
+          ) : trialOver && trial ? (
+            <TrialEnded state={trial.state} cardOnFile={subscription?.cardOnFile === true} />
+          ) : needsCard ? (
+            <TrialCardStep billing={billing} error={cardError} />
+          ) : (
+            <Outlet />
+          )}
         </main>
       </div>
     </div>

@@ -1,10 +1,11 @@
 /** App router + auth context. */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api, type Business, type MeResponse, type Subscription, type User } from "./api";
+import { api, type BillingConfig, type Business, type MeResponse, type Subscription, type User } from "./api";
 import { Spinner } from "./components/ui";
 import { Landing } from "./pages/Landing";
 import { Login, Signup } from "./pages/Auth";
+import { MockCheckout } from "./pages/TrialCard";
 import { AppShell } from "./pages/AppShell";
 import { Dashboard } from "./pages/Dashboard";
 import { Onboarding } from "./pages/Onboarding";
@@ -30,6 +31,8 @@ interface AuthState {
   business: Business | null;
   /** Subscription + free-trial clock (null when the user has no business yet). */
   subscription: Subscription | null;
+  /** Billing mode — drives the card step of the 14-day trial (BUILD 2). */
+  billing: BillingConfig | null;
   loading: boolean;
   refresh: () => Promise<MeResponse>;
   logout: () => Promise<void>;
@@ -39,6 +42,7 @@ const AuthContext = createContext<AuthState>({
   user: null,
   business: null,
   subscription: null,
+  billing: null,
   loading: true,
   refresh: async () => ({ user: null as never, business: null, subscription: null }),
   logout: async () => {},
@@ -52,6 +56,7 @@ function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [business, setBusiness] = useState<Business | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [billing, setBilling] = useState<BillingConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = async (): Promise<MeResponse> => {
@@ -59,6 +64,7 @@ function AuthProvider({ children }: { children: ReactNode }) {
     setUser(res.user);
     setBusiness(res.business);
     setSubscription(res.subscription);
+    setBilling(res.billing ?? null);
     setLoading(false);
     return res;
   };
@@ -70,6 +76,7 @@ function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setBusiness(null);
       setSubscription(null);
+      setBilling(null);
       setLoading(false);
     }
   };
@@ -80,14 +87,15 @@ function AuthProvider({ children }: { children: ReactNode }) {
         setUser(r.user);
         setBusiness(r.business);
         setSubscription(r.subscription);
+        setBilling(r.billing ?? null);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
   const value = useMemo(
-    () => ({ user, business, subscription, loading, refresh, logout }),
-    [user, business, subscription, loading, refresh, logout]
+    () => ({ user, business, subscription, billing, loading, refresh, logout }),
+    [user, business, subscription, billing, loading, refresh, logout]
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -145,6 +153,8 @@ export function App() {
         <Route path="/widget-demo" element={<WidgetDemo />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        {/* The mock provider's stand-in for hosted checkout (no Stripe keys). */}
+        <Route path="/mock-checkout" element={<MockCheckout />} />
         <Route
           path="/app"
           element={

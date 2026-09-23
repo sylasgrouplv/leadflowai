@@ -121,9 +121,14 @@ export interface NewBusiness {
 
 /**
  * The free trial the marketing site promises ("Try our service free for 14
- * days"). Every business created through createBusiness starts a 14-day clock;
- * the trial is free, no card is ever taken, and nothing is ever charged when it
- * ends or when the customer cancels early.
+ * days"). Every business created through createBusiness starts a 14-day clock.
+ *
+ * Owner direction (BUILD 2): the trial REQUIRES a card. The clock below is the
+ * local, always-available trial state; the card + the actual charge live in
+ * Stripe behind the StripeProvider interface (a subscription with
+ * `trial_period_days = 14`), so $0 is charged during the trial and the first
+ * charge only happens when the trial ends uncanceled. Cancelling before then
+ * deletes the Stripe subscription — nothing is ever charged.
  */
 export const TRIAL_DAYS = 14;
 export const TRIAL_MS = TRIAL_DAYS * 86_400_000;
@@ -1729,10 +1734,14 @@ function daysLeftUntil(endMs: number, nowMs: number) {
 }
 
 /**
- * Cancels the free trial: flips the subscription status to "canceled" and
- * leaves the plan + clock in place for the audit trail. Idempotent — calling it
- * twice is a no-op the second time. Nothing is charged either way (the trial is
- * free and there is no payment method on file), and Stripe is never touched.
+ * Cancels the trial: flips the subscription status to "canceled" and leaves the
+ * plan + clock in place for the audit trail. Idempotent — calling it twice is a
+ * no-op the second time.
+ *
+ * Nothing is charged by this local flip. The cancel-trial route above it
+ * additionally cancels the Stripe subscription (when the row has a
+ * stripeSubscriptionId) so a card-required trial is never charged after the
+ * customer cancels.
  */
 export async function cancelTrial(businessId: string) {
   const existing = await getSubscription(businessId);
@@ -1759,6 +1768,28 @@ export async function clearSubscriptionPeriodEnd(businessId: string) {
   return getSubscription(businessId);
 }
 
+/**
+ * Stores the Stripe customer/subscription ids for a business. Written by the
+ * card-gated trial flow (POST /api/billing/trial-checkout and /trial-confirm)
+ * once the customer finishes Stripe Checkout.
+ *
+ * Only the ids are stored: the trial clock (currentPeriodEnd) stays owned by
+ * the local clock plus Stripe's `trial_period_days` contract — there is no
+ * payment webhook in this build, so the local row and Stripe converge only
+ * through these ids and the cancel path.
+ */
+export async function setSubscriptionStripeIds(
+  businessId: string,
+  ids: { stripeCustomerId?: string; stripeSubscriptionId?: string }
+) {
+  const existing = await getSubscription(businessId);
+  if (!existing) return null;
+  const patch: { updatedAt: number; stripeCustomerId?: string; stripeSubscriptionId?: string } = { updatedAt: now() };
+  if (ids.stripeCustomerId !== undefined) patch.stripeCustomerId = ids.stripeCustomerId;
+  if (ids.stripeSubscriptionId !== undefined) patch.stripeSubscriptionId = ids.stripeSubscriptionId;
+  await getDb().update(s.subscriptions).set(patch).where(eq(s.subscriptions.businessId, businessId)).execute();
+  return getSubscription(businessId);
+}
 export async function setSubscriptionPlan(businessId: string, plan: (typeof PLAN_NAMES)[number], status?: (typeof s.SUBSCRIPTION_STATUSES)[number]) {
   const existing = await getSubscription(businessId);
   const t = now();

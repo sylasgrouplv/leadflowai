@@ -86,6 +86,26 @@ export const env = {
   get stripeApiKey() {
     return process.env.STRIPE_API_KEY || "";
   },
+  /**
+   * Stripe price ids for the sellable catalog (STRIPE_PROVIDER=live).
+   * NEVER hard-coded in source — the owner supplies them with the keys:
+   *   STRIPE_PRICE_STARTER / STRIPE_PRICE_PROFESSIONAL / STRIPE_PRICE_PREMIUM
+   * or one JSON map: STRIPE_PRICES_JSON='{"starter":"price_...", ...}'.
+   * A missing entry makes the live provider throw a clear "set STRIPE_PRICE_*"
+   * error instead of charging the wrong price (or silently mocking).
+   */
+  get stripePriceStarter() {
+    return process.env.STRIPE_PRICE_STARTER || "";
+  },
+  get stripePriceProfessional() {
+    return process.env.STRIPE_PRICE_PROFESSIONAL || "";
+  },
+  get stripePricePremium() {
+    return process.env.STRIPE_PRICE_PREMIUM || "";
+  },
+  get stripePricesJson() {
+    return process.env.STRIPE_PRICES_JSON || "";
+  },
   /** True when the request arrived over TLS (the public proxy terminates TLS). */
   isHttpsRequest(forwardedProto?: string) {
     return forwardedProto === "https";

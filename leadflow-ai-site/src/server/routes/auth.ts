@@ -6,6 +6,7 @@ import { hashPassword, verifyPassword } from "../auth/password";
 import { clearSessionCookie, createSession, destroySession, setSessionCookie, SESSION_COOKIE } from "../auth/session";
 import { attachUser, HttpError, rateLimit, requireUser } from "../auth/guards";
 import { getCookie } from "hono/cookie";
+import { billingConfig } from "../billing/config";
 
 const signupSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(100),
@@ -71,6 +72,8 @@ authRoutes.get("/me", attachUser, async (c) => {
     user: publicUser(user),
     business: business ? serializeBusiness(business) : null,
     subscription: subscription ? serializeSubscription(subscription) : null,
+    // Card-gated trial mode (BUILD 2) — the client shows the card step from this.
+    billing: billingConfig(),
   });
 });
 
@@ -82,6 +85,8 @@ export function publicUser(u: NonNullable<Awaited<ReturnType<typeof repo.getUser
  * Subscription payload for the client. Backward compatible (plan + status are
  * still first-class) plus the free-trial clock: currentPeriodEnd (null = no
  * clock set, i.e. an account that never expires) and the derived trialState.
+ * `cardOnFile` is the card-gated trial flag (BUILD 2): true once Stripe
+ * Checkout has stored a customer/subscription for this business.
  */
 export function serializeSubscription(sub: NonNullable<Awaited<ReturnType<typeof repo.getSubscription>>>) {
   return {
@@ -89,6 +94,7 @@ export function serializeSubscription(sub: NonNullable<Awaited<ReturnType<typeof
     status: sub.status,
     currentPeriodEnd: sub.currentPeriodEnd ?? null,
     trialState: repo.getTrialState(sub),
+    cardOnFile: !!sub.stripeSubscriptionId,
   };
 }
 

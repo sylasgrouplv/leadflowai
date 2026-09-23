@@ -352,7 +352,7 @@ export function Landing() {
             </Link>
           </div>
           <p className="mt-5 text-sm text-slate-400">{TRUST_LINE}</p>
-          {/* The trial we actually enforce (14 days, no card) — clickable, not just a claim. */}
+          {/* The trial we actually enforce (14 days, card required to start) — clickable, not just a claim. */}
           <Link
             to="/signup"
             className="mt-6 inline-flex max-w-2xl items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-5 py-3.5 text-left text-sm font-semibold text-emerald-800 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-100 sm:text-base"

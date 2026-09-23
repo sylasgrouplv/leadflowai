@@ -104,7 +104,10 @@ export function Signup() {
   return (
     <AuthLayout footer={<>Already have an account? <Link to="/login" className="font-semibold text-indigo-600 hover:text-indigo-500">Log in</Link></>}>
       <h1 className="text-xl font-bold text-slate-900">Create your account</h1>
-      <p className="mt-1 text-sm text-slate-500">Start your 14-day free trial. No credit card required.</p>
+      <p className="mt-1 text-sm text-slate-500">
+        Start your 14-day free trial. We ask for your card to start it — $0 charged today, and cancel before the trial
+        ends and you're never charged.
+      </p>
       <form onSubmit={submit} className="mt-6 space-y-4">
         <Field label="Your name">
           <Input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Smith" />

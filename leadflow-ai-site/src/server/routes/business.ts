@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as repo from "../db/repo";
 import { attachUser, HttpError, requireUser } from "../auth/guards";
 import { serializeBusiness, serializeSubscription } from "./auth";
+import { getStripeProvider } from "../integrations";
 import { APP_TYPES } from "../db/schema";
 import type { BusinessCategory } from "../db/schema";
 
@@ -136,9 +137,12 @@ businessRoutes.put("/policies", async (c) => {
   return c.json({ business: serializeBusiness((await repo.getBusinessById(business.id))!) });
 });
 
-// POST /api/business/cancel-trial — end the free trial early. The trial is
-// free and no payment method is on file, so this never charges anyone: it only
-// flips the subscription status to "canceled". Idempotent (safe to call twice).
+// POST /api/business/cancel-trial — end the trial early. Nothing is charged:
+// the card on file only exists so the first charge can happen when the trial
+// ends, and cancelling before that means the charge never happens. This flips
+// the local subscription status to "canceled" AND cancels the Stripe
+// subscription when the row has one, so Stripe is not left to bill a customer
+// who cancelled. Idempotent (safe to call twice).
 businessRoutes.post("/cancel-trial", async (c) => {
   const user = await requireUser(c);
   const business = await repo.getBusinessForUser(user.id);
@@ -148,10 +152,29 @@ businessRoutes.post("/cancel-trial", async (c) => {
   const subscription = await repo.cancelTrial(business.id);
   if (!before || !subscription) throw new HttpError(404, "No subscription found for this business.");
   if (before.status !== "canceled") {
+    // Card-required trial: cancel the Stripe subscription so trial_period_days
+    // can never bill someone who cancelled. The mock returns { ok: true }; a
+    // live provider without its key must not break the local cancel, so a
+    // provider failure is recorded (charged stays false) instead of thrown.
+    let stripeCanceled = false;
+    let stripeError = "";
+    const stripeSubscriptionId = subscription.stripeSubscriptionId || "";
+    if (stripeSubscriptionId) {
+      try {
+        await getStripeProvider().cancelSubscription(stripeSubscriptionId);
+        stripeCanceled = true;
+      } catch (err) {
+        stripeError = err instanceof Error ? err.message : String(err);
+        console.error("cancel-trial: Stripe cancelSubscription failed:", stripeError);
+      }
+    }
     await repo.audit(business.id, user.id, "subscription.cancel_trial", "subscription", subscription.id, {
       plan: subscription.plan,
       currentPeriodEnd: subscription.currentPeriodEnd ?? null,
       charged: false,
+      stripeSubscriptionId,
+      stripeCanceled,
+      ...(stripeError ? { stripeError } : {}),
     });
   }
   return c.json({ subscription: serializeSubscription(subscription) });

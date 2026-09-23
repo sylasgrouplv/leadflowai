@@ -5,6 +5,7 @@
 import { Hono } from "hono";
 import { authRoutes } from "./routes/auth";
 import { businessRoutes } from "./routes/business";
+import { billingRoutes } from "./routes/billing";
 import { serviceRoutes } from "./routes/services";
 import { knowledgeRoutes } from "./routes/knowledge";
 import { dashboardRoutes } from "./routes/dashboard";
@@ -101,6 +102,7 @@ export async function createApp() {
 
   app.route("/api/auth", authRoutes);
   app.route("/api/business", businessRoutes);
+  app.route("/api/billing", billingRoutes);
   app.route("/api/services", serviceRoutes);
   app.route("/api/knowledge", knowledgeRoutes);
   app.route("/api/dashboard", dashboardRoutes);

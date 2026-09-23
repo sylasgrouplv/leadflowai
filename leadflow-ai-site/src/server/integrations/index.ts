@@ -6,7 +6,7 @@
  *   EMAIL_PROVIDER=mock       (default) | sendgrid (future)
  *   CALENDAR_PROVIDER=mock    (default) | google (future)
  *   CRM_PROVIDER=mock         (default) | hubspot (future)
- *   STRIPE_PROVIDER=mock      (default) | live (future)
+ *   STRIPE_PROVIDER=mock      (default) | live (card-gated trial, real prices)
  *   WEBFETCH_PROVIDER=mock    (default) | live (future)
  *   SOCIAL_PROVIDER=mock      (default) | live (future)
  *
@@ -24,6 +24,7 @@ import { MockCalendarProvider } from "./calendar";
 import { MockCrmProvider } from "./crm";
 import { HubSpotCrmProvider } from "./hubspot";
 import { MockStripeProvider } from "./stripe";
+import { LiveStripeProvider } from "./stripe-live";
 import { MockWebFetchProvider } from "./webfetch";
 import { MockSocialProvider } from "./social";
 import { env } from "../env";
@@ -53,6 +54,10 @@ const crm: Record<string, () => CrmProvider> = {
 };
 const stripe: Record<string, () => StripeProvider> = {
   mock: () => new MockStripeProvider(),
+  // Real Stripe provider: registered + interface-complete, but it throws a
+  // clear "set STRIPE_API_KEY" error until a key is configured (config-only
+  // swap, same pattern as HubSpot/OpenAI/Anthropic).
+  live: () => new LiveStripeProvider(),
 };
 const webFetch: Record<string, () => WebFetchProvider> = {
   mock: () => new MockWebFetchProvider(),

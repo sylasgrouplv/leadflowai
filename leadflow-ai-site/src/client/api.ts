@@ -92,12 +92,28 @@ export interface Subscription {
   /** Trial end (epoch ms). null = no clock set, i.e. the account never expires. */
   currentPeriodEnd: number | null;
   trialState: TrialState;
+  /**
+   * Card-gated trial (BUILD 2): true once the card step (Stripe Checkout) has
+   * stored a customer/subscription for this business.
+   */
+  cardOnFile?: boolean;
+}
+
+/** Billing mode from the server (GET /api/auth/me → billing). */
+export interface BillingConfig {
+  provider: string;
+  live: boolean;
+  cardRequired: boolean;
+  trialDays: number;
+  pricesConfigured: boolean;
 }
 
 export interface MeResponse {
   user: User;
   business: Business | null;
   subscription: Subscription | null;
+  /** Card-gated trial mode (BUILD 2). */
+  billing?: BillingConfig;
 }
 
 export interface Service {

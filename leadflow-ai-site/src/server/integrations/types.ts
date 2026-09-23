@@ -221,13 +221,81 @@ export interface CrmProvider {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Stripe billing contract (owner decision, BUILD 2): the 14-day free trial
+ * REQUIRES a card, so the trial is modelled as a real subscription with
+ * `trial_period_days` — $0 is charged during the trial, the first charge only
+ * happens when it ends, and cancelling before that means never being charged.
+ *
+ * Every option added for the card-gated flow is OPTIONAL and backward
+ * compatible, so MockStripeProvider (and any future implementation) still
+ * satisfies this interface unchanged.
+ */
+export interface StripeCustomerInput {
+  email: string;
+  name: string;
+  businessId: string;
+}
+
+export interface StripeSubscriptionInput {
+  customerId: string;
+  plan: string;
+  businessId: string;
+  /** Free-trial length in days (Stripe `trial_period_days`). Defaults to 14. */
+  trialDays?: number;
+  /** Payment method id collected at checkout (live) — attached to the subscription. */
+  paymentMethodId?: string;
+  /** Provider price id; resolved from env by the live provider when omitted. */
+  priceId?: string;
+  /** Extra metadata stored provider-side (businessId is always included). */
+  metadata?: Record<string, string>;
+}
+
+export interface StripeCheckoutInput {
+  businessId: string;
+  plan: string;
+  /** Absolute URL the provider sends the customer back to after checkout. */
+  successUrl: string;
+  /** Absolute URL for a customer who backs out of checkout. */
+  cancelUrl?: string;
+  /** Reuse an existing provider customer instead of creating one at checkout. */
+  customerId?: string;
+  /** Trial length in days (Stripe `subscription_data[trial_period_days]`). */
+  trialDays?: number;
+  metadata?: Record<string, string>;
+}
+
+export interface StripeCheckoutResult {
+  /** Hosted checkout URL. */
+  url: string;
+  /** Provider session id — needed to verify the completed session on return. */
+  sessionId?: string;
+}
+
+/** A verified checkout session: what the local subscription row stores. */
+export interface StripeCheckoutDetails {
+  sessionId: string;
+  customerId: string;
+  subscriptionId: string;
+  /** Provider-side status of the session's subscription (e.g. trialing). */
+  status: string;
+  /** Provider-side trial end (epoch ms) when reported. */
+  trialEndsAt?: number | null;
+}
+
 export interface StripeProvider {
   readonly name: string;
-  createCustomer(opts: { email: string; name: string; businessId: string }): Promise<{ customerId: string }>;
-  createSubscription(opts: { customerId: string; plan: string; businessId: string }): Promise<{ subscriptionId: string; status: string }>;
+  createCustomer(opts: StripeCustomerInput): Promise<{ customerId: string }>;
+  createSubscription(opts: StripeSubscriptionInput): Promise<{ subscriptionId: string; status: string }>;
   cancelSubscription(subscriptionId: string): Promise<{ ok: true }>;
   /** Returns a hosted checkout URL. */
-  createCheckoutSession(opts: { businessId: string; plan: string; successUrl: string }): Promise<{ url: string }>;
+  createCheckoutSession(opts: StripeCheckoutInput): Promise<StripeCheckoutResult>;
+  /**
+   * Verify a completed checkout session (the billing confirm step). Optional so
+   * existing implementations stay valid; a provider that fabricates its own
+   * session ids (the mock) still returns deterministic ids.
+   */
+  retrieveCheckoutSession?(sessionId: string): Promise<StripeCheckoutDetails>;
 }
 
 // ---------------------------------------------------------------------------

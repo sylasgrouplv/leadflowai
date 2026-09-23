@@ -11,7 +11,7 @@ export type Plan = {
 };
 
 export const SETUP_FEE_NOTE =
-  "One-time setup and onboarding: $1,500–$3,000 depending on your business's needs. Then a flat monthly subscription — no per-lead surprises.";
+  "One-time setup and onboarding: $1,500. Then a flat monthly subscription — no per-lead surprises.";
 
 export const PLANS: Plan[] = [
   {
@@ -135,7 +135,7 @@ export const FAQS: Faq[] = [
   },
   {
     q: "What does it cost?",
-    a: "Plans are $497, $997, or $1,497 per month, plus a one-time setup fee of $1,500–$3,000 based on your needs. New accounts start with a free trial — no credit card required — so you can see it working before you pay anything.",
+    a: "Plans are $497, $997, or $1,497 per month, plus a one-time setup fee of $1,500. A new account starts with a 14-day free trial: we ask for your card to start it, $0 is charged during the trial, and if you cancel before the trial ends you're never charged.",
   },
   {
     q: "What happens when the AI doesn't know an answer?",
@@ -155,4 +155,5 @@ export const FAQS: Faq[] = [
   },
 ];
 
-export const TRUST_LINE = "Free trial · No credit card required · Cancel anytime";
+export const TRUST_LINE =
+  "14-day free trial · Card required to start · Cancel before the trial ends and you're never charged";
