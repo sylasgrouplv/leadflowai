@@ -75,10 +75,29 @@ export interface Business {
   createdAt: number;
 }
 
+/** Free-trial clock state derived server-side (repo.getTrialState). */
+export type TrialStateName = "active" | "expiringSoon" | "expired" | "canceled";
+
+export interface TrialState {
+  state: TrialStateName;
+  /** Whole days left in the trial, 0 once it ended. null = no clock set. */
+  daysLeft: number | null;
+  /** Trial end (epoch ms), or null when the account has no clock (never expires). */
+  trialEndsAt: number | null;
+}
+
+export interface Subscription {
+  plan: string;
+  status: string;
+  /** Trial end (epoch ms). null = no clock set, i.e. the account never expires. */
+  currentPeriodEnd: number | null;
+  trialState: TrialState;
+}
+
 export interface MeResponse {
   user: User;
   business: Business | null;
-  subscription: { plan: string; status: string } | null;
+  subscription: Subscription | null;
 }
 
 export interface Service {

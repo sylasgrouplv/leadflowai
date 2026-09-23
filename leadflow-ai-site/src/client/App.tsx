@@ -1,7 +1,7 @@
 /** App router + auth context. */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api, type Business, type MeResponse, type User } from "./api";
+import { api, type Business, type MeResponse, type Subscription, type User } from "./api";
 import { Spinner } from "./components/ui";
 import { Landing } from "./pages/Landing";
 import { Login, Signup } from "./pages/Auth";
@@ -28,6 +28,8 @@ import { ContactPage, FeaturesPage, PricingPage, PrivacyPage, TermsPage } from "
 interface AuthState {
   user: User | null;
   business: Business | null;
+  /** Subscription + free-trial clock (null when the user has no business yet). */
+  subscription: Subscription | null;
   loading: boolean;
   refresh: () => Promise<MeResponse>;
   logout: () => Promise<void>;
@@ -36,6 +38,7 @@ interface AuthState {
 const AuthContext = createContext<AuthState>({
   user: null,
   business: null,
+  subscription: null,
   loading: true,
   refresh: async () => ({ user: null as never, business: null, subscription: null }),
   logout: async () => {},
@@ -48,12 +51,14 @@ export function useAuth() {
 function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [business, setBusiness] = useState<Business | null>(null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = async (): Promise<MeResponse> => {
     const res = await api<MeResponse>("/api/auth/me");
     setUser(res.user);
     setBusiness(res.business);
+    setSubscription(res.subscription);
     setLoading(false);
     return res;
   };
@@ -64,6 +69,7 @@ function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setUser(null);
       setBusiness(null);
+      setSubscription(null);
       setLoading(false);
     }
   };
@@ -73,12 +79,16 @@ function AuthProvider({ children }: { children: ReactNode }) {
       .then((r) => {
         setUser(r.user);
         setBusiness(r.business);
+        setSubscription(r.subscription);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const value = useMemo(() => ({ user, business, loading, refresh, logout }), [user, business, loading, refresh, logout]);
+  const value = useMemo(
+    () => ({ user, business, subscription, loading, refresh, logout }),
+    [user, business, subscription, loading, refresh, logout]
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

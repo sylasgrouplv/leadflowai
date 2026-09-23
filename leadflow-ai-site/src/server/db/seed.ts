@@ -50,6 +50,9 @@ export async function seed() {
     website: "https://smithshvac.com",
     description: "Family-owned heating and cooling company serving the greater Springfield area since 2004.",
   });
+  // The demo tenant is permanent: clear the 14-day trial clock so Smith's HVAC
+  // never expires (a NULL currentPeriodEnd means "no clock" — see getTrialState).
+  await repo.clearSubscriptionPeriodEnd(business.id);
   await repo.updateBusiness(business.id, {
     serviceAreaJson: JSON.stringify({ zipCodes: ["62701", "62702", "62703", "62704", "62711", "62712"], cities: ["Springfield", "Chatham", "Rochester"] }),
     hoursJson: JSON.stringify(HOURS),

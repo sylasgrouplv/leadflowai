@@ -1,8 +1,9 @@
 /** App shell — sidebar navigation + topbar + routed content. */
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import type { ReactNode } from "react";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useState, type ReactNode } from "react";
 import { useAuth } from "../App";
-import { cx } from "../components/ui";
+import { api, type TrialStateName } from "../api";
+import { ButtonLink, Card, cx } from "../components/ui";
 import { NotificationsBell } from "../components/NotificationsBell";
 
 interface NavItem {
@@ -161,9 +162,83 @@ function Logo({ dark }: { dark?: boolean }) {
   );
 }
 
+/**
+ * Shown instead of the app content once the free trial is really over (expired)
+ * or the customer canceled it early. Accounts with NO trial clock
+ * (currentPeriodEnd === null — the demo tenant and legacy rows) never reach
+ * this screen: a null clock means "never expires".
+ *
+ * There is no checkout URL to link to (no Stripe checkout exists for the
+ * self-serve plan yet), so the CTA points at the public pricing page and the
+ * customer can re-subscribe by talking to the team.
+ */
+function TrialEnded({ state }: { state: TrialStateName }) {
+  const canceled = state === "canceled";
+  return (
+    <div className="mx-auto max-w-2xl py-6">
+      <Card className="p-8 text-center">
+        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-50 text-amber-600">
+          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </span>
+        <h1 className="mt-4 text-xl font-bold tracking-tight text-slate-900">
+          {canceled ? "Your free trial was canceled" : "Your free trial has ended"}
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-slate-600">
+          {canceled
+            ? "You canceled before the trial ended, so nothing was charged — the 14-day trial is free and we never took a card."
+            : "Your 14-day free trial has ended. Nothing was charged: the trial is free and we never took a card."}
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-slate-600">
+          Your account, leads, and conversations are still here. Subscribe to switch the automation back on, or get in
+          touch and our team will turn it back on for you.
+        </p>
+        <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <ButtonLink to="/pricing">See plans &amp; pricing</ButtonLink>
+          <Link to="/contact" className="text-sm font-semibold text-indigo-600 hover:text-indigo-500">
+            Contact our team to re-subscribe
+          </Link>
+        </div>
+        <p className="mt-5 text-xs text-slate-400">No charges are made until you subscribe to a plan.</p>
+      </Card>
+    </div>
+  );
+}
+
 export function AppShell() {
-  const { user, business, logout } = useAuth();
+  const { user, business, subscription, refresh, logout } = useAuth();
   const navigate = useNavigate();
+  const [cancelingTrial, setCancelingTrial] = useState(false);
+  // The free-trial clock (13: null = no clock set, i.e. the account never expires).
+  const trial = subscription?.trialState ?? null;
+  const trialWasReal = subscription?.currentPeriodEnd != null;
+  const trialOver = trialWasReal && (trial?.state === "expired" || trial?.state === "canceled");
+  const planLabel = subscription?.plan ? subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1) : "Starter";
+  const days = trial?.daysLeft ?? 0;
+  const pill = !trial || trial.state === "active"
+    ? trial && trial.trialEndsAt !== null
+      ? { label: `Trial · ${days} day${days === 1 ? "" : "s"} left`, cls: "bg-emerald-50 text-emerald-700" }
+      : { label: `Trial · ${planLabel}`, cls: "bg-indigo-50 text-indigo-600" }
+    : trial.state === "expiringSoon"
+      ? { label: `Trial · ${days} day${days === 1 ? "" : "s"} left`, cls: "bg-emerald-50 text-emerald-700" }
+      : trial.state === "expired"
+        ? { label: "Trial ended", cls: "bg-amber-50 text-amber-700" }
+        : { label: "Trial canceled", cls: "bg-slate-100 text-slate-600" };
+  // Owners can end the free trial early; employees never see billing controls.
+  const canCancelTrial = user?.role === "owner" && !!trial && trial.trialEndsAt !== null && !trialOver;
+  const handleCancelTrial = async () => {
+    if (!window.confirm("End your free trial now? The trial is free, so you will not be charged.")) return;
+    setCancelingTrial(true);
+    try {
+      await api("/api/business/cancel-trial", { method: "POST" });
+      await refresh();
+    } catch (err) {
+      console.error("cancel trial failed", err);
+    } finally {
+      setCancelingTrial(false);
+    }
+  };
 
   // Employees: no billing/platform settings (spec role rules). Owners/admins see everything.
   const hideForEmployee = new Set(["/app/billing", "/app/integrations", "/app/analytics", "/app/agents", "/app/ai-dashboard", "/app/system-health", "/app/admin-ai"]);
@@ -233,11 +308,20 @@ export function AppShell() {
           </p>
           <div className="flex items-center gap-2">
             <NotificationsBell />
-            <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-600">Trial · Starter</span>
+            {canCancelTrial ? (
+              <button
+                onClick={handleCancelTrial}
+                disabled={cancelingTrial}
+                className="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-500 underline decoration-dotted transition-colors hover:text-slate-800 disabled:opacity-50"
+              >
+                {cancelingTrial ? "Canceling…" : "Cancel trial"}
+              </button>
+            ) : null}
+            <span className={cx("rounded-full px-2.5 py-1 text-xs font-medium", pill.cls)}>{pill.label}</span>
           </div>
         </header>
         <main className="flex-1 px-6 py-6 lg:px-8">
-          <Outlet />
+          {trialOver && trial ? <TrialEnded state={trial.state} /> : <Outlet />}
         </main>
       </div>
     </div>
