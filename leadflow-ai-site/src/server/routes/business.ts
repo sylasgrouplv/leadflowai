@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import * as repo from "../db/repo";
 import { attachUser, HttpError, requireUser } from "../auth/guards";
-import { serializeBusiness } from "./auth";
+import { serializeBusiness, serializeSubscription } from "./auth";
 import { APP_TYPES } from "../db/schema";
 import type { BusinessCategory } from "../db/schema";
 
@@ -134,6 +134,27 @@ businessRoutes.put("/policies", async (c) => {
   const current = JSON.parse(business.policiesJson || "{}");
   await repo.updateBusiness(business.id, { policiesJson: JSON.stringify({ ...current, ...parsed.data }) });
   return c.json({ business: serializeBusiness((await repo.getBusinessById(business.id))!) });
+});
+
+// POST /api/business/cancel-trial — end the free trial early. The trial is
+// free and no payment method is on file, so this never charges anyone: it only
+// flips the subscription status to "canceled". Idempotent (safe to call twice).
+businessRoutes.post("/cancel-trial", async (c) => {
+  const user = await requireUser(c);
+  const business = await repo.getBusinessForUser(user.id);
+  if (!business) throw new HttpError(404, "No business yet.");
+
+  const before = await repo.getSubscription(business.id);
+  const subscription = await repo.cancelTrial(business.id);
+  if (!before || !subscription) throw new HttpError(404, "No subscription found for this business.");
+  if (before.status !== "canceled") {
+    await repo.audit(business.id, user.id, "subscription.cancel_trial", "subscription", subscription.id, {
+      plan: subscription.plan,
+      currentPeriodEnd: subscription.currentPeriodEnd ?? null,
+      charged: false,
+    });
+  }
+  return c.json({ subscription: serializeSubscription(subscription) });
 });
 
 // POST /api/business/complete-onboarding

@@ -352,6 +352,18 @@ export function Landing() {
             </Link>
           </div>
           <p className="mt-5 text-sm text-slate-400">{TRUST_LINE}</p>
+          {/* The trial we actually enforce (14 days, no card) — clickable, not just a claim. */}
+          <Link
+            to="/signup"
+            className="mt-6 inline-flex max-w-2xl items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-5 py-3.5 text-left text-sm font-semibold text-emerald-800 shadow-sm transition-colors hover:border-emerald-300 hover:bg-emerald-100 sm:text-base"
+          >
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white">
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+              </svg>
+            </span>
+            Try our service free for 14 days — If you don't like it, cancel before the trial ends.
+          </Link>
           <Link to="/widget-demo" className="group block" aria-label="Open the live AI receptionist demo">
             <HeroChatMock />
           </Link>

@@ -70,12 +70,26 @@ authRoutes.get("/me", attachUser, async (c) => {
   return c.json({
     user: publicUser(user),
     business: business ? serializeBusiness(business) : null,
-    subscription: subscription ? { plan: subscription.plan, status: subscription.status } : null,
+    subscription: subscription ? serializeSubscription(subscription) : null,
   });
 });
 
 export function publicUser(u: NonNullable<Awaited<ReturnType<typeof repo.getUserById>>>) {
   return { id: u.id, name: u.name, email: u.email, role: u.role, createdAt: u.createdAt };
+}
+
+/**
+ * Subscription payload for the client. Backward compatible (plan + status are
+ * still first-class) plus the free-trial clock: currentPeriodEnd (null = no
+ * clock set, i.e. an account that never expires) and the derived trialState.
+ */
+export function serializeSubscription(sub: NonNullable<Awaited<ReturnType<typeof repo.getSubscription>>>) {
+  return {
+    plan: sub.plan,
+    status: sub.status,
+    currentPeriodEnd: sub.currentPeriodEnd ?? null,
+    trialState: repo.getTrialState(sub),
+  };
 }
 
 export function serializeBusiness(b: NonNullable<Awaited<ReturnType<typeof repo.getBusinessById>>>) {

@@ -119,6 +119,17 @@ export interface NewBusiness {
   description?: string;
 }
 
+/**
+ * The free trial the marketing site promises ("Try our service free for 14
+ * days"). Every business created through createBusiness starts a 14-day clock;
+ * the trial is free, no card is ever taken, and nothing is ever charged when it
+ * ends or when the customer cancels early.
+ */
+export const TRIAL_DAYS = 14;
+export const TRIAL_MS = TRIAL_DAYS * 86_400_000;
+/** A trial this close to the end reads as "expiring soon" in the UI. */
+export const TRIAL_EXPIRING_SOON_DAYS = 3;
+
 export async function createBusiness(b: NewBusiness) {
   const db = getDb();
   const id = newId();
@@ -142,14 +153,15 @@ export async function createBusiness(b: NewBusiness) {
       .execute();
     await tx.insert(s.teamMembers).values({ id: newId(), businessId: id, userId: b.ownerId, role: "owner", createdAt: t }).execute();
     // Every business starts with an integration row per provider (mock status
-    // until connected) and a trialing subscription row.
+    // until connected) and a trialing subscription row whose currentPeriodEnd
+    // is the end of the 14-day free trial (day 0 = the day they signed up).
     for (const provider of s.INTEGRATION_PROVIDERS) {
       await tx.insert(s.integrations)
         .values({ id: newId(), businessId: id, provider, status: "not_configured", createdAt: t, updatedAt: t })
         .execute();
     }
     await tx.insert(s.subscriptions)
-      .values({ id: newId(), businessId: id, plan: "starter", status: "trialing", createdAt: t, updatedAt: t })
+      .values({ id: newId(), businessId: id, plan: "starter", status: "trialing", currentPeriodEnd: t + TRIAL_MS, createdAt: t, updatedAt: t })
       .execute();
     await tx.insert(s.widgetSettings)
       .values({ id: newId(), businessId: id, ...DEFAULT_WIDGET_SETTINGS, createdAt: t, updatedAt: t })
@@ -1669,6 +1681,82 @@ export async function setIntegrationStatus(businessId: string, provider: (typeof
 export async function getSubscription(businessId: string) {
   const rows = await getDb().select().from(s.subscriptions).where(eq(s.subscriptions.businessId, businessId)).execute();
   return rows[0] ?? null;
+}
+
+export type TrialStateName = "active" | "expiringSoon" | "expired" | "canceled";
+
+export interface TrialState {
+  state: TrialStateName;
+  /** Whole days left in the trial, 0 once it has ended. null = no clock set. */
+  daysLeft: number | null;
+  /** Trial end (epoch ms), or null when the account has no clock (never expires). */
+  trialEndsAt: number | null;
+}
+
+/**
+ * Pure, dependency-free trial clock. Enforcement is deliberately conservative:
+ *
+ *   - a NULL currentPeriodEnd means "no clock set" — the account never expires.
+ *     That is what keeps the seeded demo tenant (Smith's HVAC) and any legacy
+ *     account alive; null is never treated as expired.
+ *   - `canceled` wins first — the customer ended the trial early, and the trial
+ *     is free, so nothing is ever charged.
+ *   - `expired` only when status is "trialing" AND a clock exists AND that clock
+ *     is in the past. A paid ("active") subscription whose period lapsed is NOT
+ *     expired here.
+ *   - otherwise it's trialing: "expiringSoon" inside the last few days, else
+ *     "active".
+ */
+export function getTrialState(
+  subscription: { status: string; currentPeriodEnd?: number | null } | null | undefined,
+  nowMs: number = now()
+): TrialState {
+  const trialEndsAt = subscription?.currentPeriodEnd ?? null;
+  if (!subscription) return { state: "active", daysLeft: null, trialEndsAt: null };
+  if (subscription.status === "canceled") {
+    return { state: "canceled", daysLeft: trialEndsAt === null ? null : daysLeftUntil(trialEndsAt, nowMs), trialEndsAt };
+  }
+  if (trialEndsAt === null) return { state: "active", daysLeft: null, trialEndsAt: null };
+  const daysLeft = daysLeftUntil(trialEndsAt, nowMs);
+  if (subscription.status === "trialing" && trialEndsAt < nowMs) return { state: "expired", daysLeft: 0, trialEndsAt };
+  if (daysLeft <= TRIAL_EXPIRING_SOON_DAYS) return { state: "expiringSoon", daysLeft, trialEndsAt };
+  return { state: "active", daysLeft, trialEndsAt };
+}
+
+/** ceil((end - now) / 1 day), clamped at 0 — never negative. */
+function daysLeftUntil(endMs: number, nowMs: number) {
+  return Math.max(0, Math.ceil((endMs - nowMs) / 86_400_000));
+}
+
+/**
+ * Cancels the free trial: flips the subscription status to "canceled" and
+ * leaves the plan + clock in place for the audit trail. Idempotent — calling it
+ * twice is a no-op the second time. Nothing is charged either way (the trial is
+ * free and there is no payment method on file), and Stripe is never touched.
+ */
+export async function cancelTrial(businessId: string) {
+  const existing = await getSubscription(businessId);
+  if (!existing) return null;
+  if (existing.status === "canceled") return existing;
+  await getDb()
+    .update(s.subscriptions)
+    .set({ status: "canceled", updatedAt: now() })
+    .where(eq(s.subscriptions.businessId, businessId))
+    .execute();
+  return getSubscription(businessId);
+}
+
+/**
+ * Clears the trial clock so an account never expires (the permanent demo
+ * tenant, and any legacy row that should stay open). Used by the seed.
+ */
+export async function clearSubscriptionPeriodEnd(businessId: string) {
+  await getDb()
+    .update(s.subscriptions)
+    .set({ currentPeriodEnd: null, updatedAt: now() })
+    .where(eq(s.subscriptions.businessId, businessId))
+    .execute();
+  return getSubscription(businessId);
 }
 
 export async function setSubscriptionPlan(businessId: string, plan: (typeof PLAN_NAMES)[number], status?: (typeof s.SUBSCRIPTION_STATUSES)[number]) {
